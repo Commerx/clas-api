@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Api\V7\ListingsController;
+use App\Http\Controllers\Api\V7\NotificationsController;
 use App\Http\Controllers\Api\V7\SecurityController;
 use Illuminate\Support\Facades\Route;
 
@@ -15,5 +17,21 @@ use Illuminate\Support\Facades\Route;
  * rather than letting Laravel return a 405 the apps have never seen.
  */
 Route::prefix('v7')->group(function () {
+    // Unauthenticated: login issues the token the rest of these need.
     Route::any('security/login', [SecurityController::class, 'login']);
+
+    /*
+     * Authenticated. The middleware argument records where v7 read the token
+     * from for that action — Yii's get() and post() do not fall through to
+     * each other, so an endpoint that read the query string genuinely
+     * rejected a token sent in the body. Check the original before porting.
+     */
+    Route::middleware('auth.v7:query')->group(function () {
+        Route::any('notifications/list', [NotificationsController::class, 'index']);
+        Route::any('notifications/categories', [NotificationsController::class, 'categories']);
+
+        Route::any('listings/all', [ListingsController::class, 'all']);
+        Route::any('listings/geofence-listings', [ListingsController::class, 'geofenceListings']);
+        Route::any('listings/first-nations-listings', [ListingsController::class, 'firstNationsListings']);
+    });
 });

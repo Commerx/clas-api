@@ -69,6 +69,27 @@ function shape($v)
     return 'string';
 }
 
+/** Flatten a nested shape into dotted paths, so a mismatch names its location. */
+function flatten($value, string $prefix = ''): array
+{
+    if (! is_array($value)) {
+        return [$prefix === '' ? '(root)' : $prefix => (string) $value];
+    }
+
+    if ($value === []) {
+        return [$prefix === '' ? '(root)' : $prefix => '[]'];
+    }
+
+    $out = [];
+
+    foreach ($value as $key => $inner) {
+        $path = $prefix === '' ? (string) $key : $prefix.'.'.$key;
+        $out += flatten($inner, $path);
+    }
+
+    return $out;
+}
+
 $pass = $fail = 0;
 
 foreach ($cases as $name => $case) {
@@ -91,26 +112,22 @@ foreach ($cases as $name => $case) {
             $problems[] = 'top-level key order/set differs: old=['
                 .implode(',', array_keys($ja)).'] new=['.implode(',', array_keys($jb)).']';
         }
-        $sa = shape($ja);
-        $sb = shape($jb);
-        if ($sa !== $sb) {
-            foreach (array_unique(array_merge(array_keys($sa['data'] ?? []), array_keys($sb['data'] ?? []))) as $k) {
-                $va = $sa['data'][$k] ?? '<missing>';
-                $vb = $sb['data'][$k] ?? '<missing>';
-                if ($va !== $vb) {
-                    $problems[] = sprintf('data.%s: old=%s new=%s', $k,
-                        is_array($va) ? 'array' : $va, is_array($vb) ? 'array' : $vb);
-                }
+        $flatA = flatten(shape($ja));
+        $flatB = flatten(shape($jb));
+
+        foreach (array_keys($flatA + $flatB) as $path) {
+            $va = $flatA[$path] ?? '<missing>';
+            $vb = $flatB[$path] ?? '<missing>';
+
+            if ($va !== $vb) {
+                $problems[] = sprintf('%s: old=%s new=%s', $path, $va, $vb);
             }
-            if (($sa['error'] ?? null) !== ($sb['error'] ?? null)
-                || ($ja['error'] ?? null) !== ($jb['error'] ?? null)) {
-                $problems[] = sprintf('error: old=%s new=%s',
-                    var_export($ja['error'] ?? null, true), var_export($jb['error'] ?? null, true));
-            }
-            if (($ja['success'] ?? null) !== ($jb['success'] ?? null)) {
-                $problems[] = sprintf('success: old=%s new=%s',
-                    var_export($ja['success'] ?? null, true), var_export($jb['success'] ?? null, true));
-            }
+        }
+
+        // Error text is part of the contract, not just its type.
+        if (($ja['error'] ?? null) !== ($jb['error'] ?? null)) {
+            $problems[] = sprintf('error text: old=%s new=%s',
+                var_export($ja['error'] ?? null, true), var_export($jb['error'] ?? null, true));
         }
     }
 
