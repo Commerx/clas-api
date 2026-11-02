@@ -2,6 +2,13 @@
 
 return [
 
+    'google' => [
+        // Only used to resolve a timezone name for a coordinate, cached
+        // forever per location. Rotate the key that was hardcoded in the
+        // Yii app before reusing it here.
+        'timezone_key' => env('GOOGLE_TIMEZONE_KEY'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V7;
 
+use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Models\NotificationCategory;
 use Illuminate\Http\JsonResponse;
@@ -24,14 +25,9 @@ use Illuminate\Support\Facades\DB;
  */
 class NotificationsController extends Controller
 {
-    /** Columns that v7's raw query returned as strings. */
-    private const LIST_STRING_COLUMNS = [
-        'id', 'sender_id', 'is_admin_notification', 'is_read',
-    ];
-
     public function index(Request $request): JsonResponse
     {
-        $user = $request->attributes->get('v7_user');
+        $user = $request->attributes->get('api_user');
 
         $start = (int) $request->query('start', 0);
         $limit = $request->query('limit', '');
@@ -67,14 +63,10 @@ class NotificationsController extends Controller
         }
 
         $items = $query->get()
-            ->map(fn ($row) => $this->stringifyListRow((array) $row))
+            ->map(fn ($row) => $this->castRow((array) $row))
             ->all();
 
-        return new JsonResponse([
-            'error' => '',
-            'success' => true,
-            'data' => ['items' => $items],
-        ]);
+        return ApiResponse::data(['items' => $items]);
     }
 
     public function categories(): JsonResponse
@@ -85,22 +77,21 @@ class NotificationsController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        return new JsonResponse([
-            'error' => '',
-            'success' => true,
-            'data' => ['items' => $categories],
-        ]);
+        return ApiResponse::data(['items' => $categories]);
     }
 
-    /**
-     * PDO under Yii returned every column of a raw query as a string. Laravel
-     * returns native types, so the numeric columns are cast back.
-     */
-    private function stringifyListRow(array $row): array
+    /** Native types: the old API returned these as strings from a raw query. */
+    private function castRow(array $row): array
     {
-        foreach (self::LIST_STRING_COLUMNS as $column) {
+        foreach (['id', 'sender_id'] as $column) {
+            if (isset($row[$column])) {
+                $row[$column] = (int) $row[$column];
+            }
+        }
+
+        foreach (['is_admin_notification', 'is_read'] as $column) {
             if (array_key_exists($column, $row) && $row[$column] !== null) {
-                $row[$column] = (string) $row[$column];
+                $row[$column] = (bool) (int) $row[$column];
             }
         }
 

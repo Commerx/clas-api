@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V7;
 
+use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Models\DeviceToken;
 use App\Models\Land;
@@ -27,47 +28,48 @@ class SecurityController extends Controller
 {
     public function login(Request $request): JsonResponse
     {
-        if (! $request->isMethod('post')) {
-            return $this->failure('Invalid Request!');
-        }
-
         $login = (string) $request->input('login', '');
         $password = (string) $request->input('password', '');
         $os = (string) $request->input('os', '');
         $deviceToken = (string) $request->input('device_token', '');
 
-        // v7 reports one error at a time, in field order, using Yii's wording.
+        $errors = [];
+
         foreach (['login' => $login, 'password' => $password, 'os' => $os] as $field => $value) {
             if (trim($value) === '') {
-                return $this->failure(ucfirst($field).' cannot be blank.');
+                $errors[$field] = [ucfirst($field).' is required.'];
             }
+        }
+
+        if ($errors !== []) {
+            return ApiResponse::invalid($errors);
         }
 
         $user = User::findByLogin(trim($login));
 
         if ($user === null || ! $user->validatePassword($password)) {
-            return $this->failure('Invalid login or password');
+            return ApiResponse::unauthenticated('Invalid login or password.');
         }
 
         if (! $user->allowsGuest()) {
             if (! $user->isConfirmed()) {
-                return $this->failure(
-                    'Your account is de-activated, request a new confirmation link to verify your email.'
+                return ApiResponse::error(
+                    'Your account is not activated. Request a new confirmation link to verify your email.',
+                    403
                 );
             }
 
             if ($user->isBlocked()) {
-                return $this->failure('Your account has been deactivated. Please contact support.');
+                return ApiResponse::error(
+                    'Your account has been deactivated. Please contact support.',
+                    403
+                );
             }
         }
 
         $this->rememberDeviceToken($user, $os, $deviceToken);
 
-        return new JsonResponse([
-            'error' => '',
-            'success' => true,
-            'data' => $this->loginPayload($user),
-        ]);
+        return ApiResponse::data($this->loginPayload($user));
     }
 
     /**
@@ -162,8 +164,7 @@ class SecurityController extends Controller
             ->map(fn ($row) => (array) $row)
             ->all();
 
-        // String, not integer — see the class comment.
-        $data['notifications_unread_count'] = (string) DB::table('notifications_users_mapping')
+        $data['notifications_unread_count'] = (int) DB::table('notifications_users_mapping')
             ->where('user_id', $user->id)
             ->where('is_read', 0)
             ->count();
@@ -192,10 +193,5 @@ class SecurityController extends Controller
     private function sevenDaysAfter(int $createdAt): string
     {
         return date('Y-m-d', strtotime('+7 days', $createdAt));
-    }
-
-    private function failure(string $message): JsonResponse
-    {
-        return new JsonResponse(['error' => $message, 'success' => false]);
     }
 }

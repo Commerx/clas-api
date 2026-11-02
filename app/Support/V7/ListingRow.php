@@ -5,20 +5,40 @@ namespace App\Support\V7;
 use Illuminate\Support\Collection;
 
 /**
- * Shapes a `land` row the way v7's listings endpoints did.
+ * Shapes a `land` row for the API.
  *
- * Everything here exists to preserve observed v7 output, including several
- * things that are plainly bugs. They are preserved because two shipped mobile
- * apps parse this response and cannot be patched from the server — correcting
- * a field here breaks an installed app, whatever the field ought to contain.
- * Each quirk is marked QUIRK with what v7 does and why it does it.
+ * This used to reproduce the old API's output exactly, bugs included, because
+ * the shipped apps could not be patched. That constraint is gone: the new API
+ * is served from its own subdomain and consumed by a new build, while the old
+ * domain keeps serving old builds unchanged. So the bugs are fixed here, and
+ * each fix is noted with what the old behaviour was, because the app developer
+ * has to know what changed.
+ *
+ * WAS: numeric columns arrived as strings from raw queries ("56", "0") but as
+ *      integers from ActiveRecord endpoints, in the same API.
+ * NOW: native types throughout.
+ *
+ * WAS: `points` returned a single object — the last element — because the old
+ *      code wrote `foreach ($points as $points)` and the loop variable
+ *      shadowed the collection. A listing with 19 boundary points returned one.
+ * NOW: the full array.
+ *
+ * WAS: `features` compared each key feature's *position* in the loaded list
+ *      against ids taken from the listing, so it returned almost nothing.
+ * NOW: matches on the feature id, so it returns the listing's actual features.
+ *
+ * WAS: an empty column rendered as "" and a NULL as null, from a loose
+ *      `!= ''` guard.
+ * NOW: both render as an empty array for the geometry fields.
  */
 class ListingRow
 {
-    /** Columns a raw yii\db\Query returned as strings, so they stay strings. */
-    private const STRING_COLUMNS = [
-        'land_id', 'owner', 'is_rid_land', 'is_first_nations',
-        'is_open_property', 'fireban_status_id', 'kml_file_exists',
+    private const INT_COLUMNS = [
+        'land_id', 'owner', 'fireban_status_id', 'area_size',
+    ];
+
+    private const BOOL_COLUMNS = [
+        'is_rid_land', 'is_first_nations', 'is_open_property', 'kml_file_exists',
     ];
 
     /**
@@ -27,130 +47,123 @@ class ListingRow
      */
     public static function format(array $row, Collection $keyFeatures, bool $withGeometry): array
     {
-        $row = self::stringifyNumerics($row);
+        $row = self::castScalars($row);
 
         if (array_key_exists('key_features', $row)) {
             $row['features'] = self::features((string) ($row['key_features'] ?? ''), $keyFeatures);
+        }
+
+        if (array_key_exists('photos', $row)) {
+            // GROUP_CONCAT gives one comma-joined string, or null for none.
+            $row['photos'] = $row['photos'] === null || $row['photos'] === ''
+                ? []
+                : explode(',', (string) $row['photos']);
         }
 
         if (! $withGeometry) {
             return $row;
         }
 
-        // QUIRK: a loose != '' comparison, so both NULL and '' skip processing
-        // and the column is emitted unchanged. That is why an empty string
-        // renders as "" while a NULL renders as null — the apps see both.
         if (array_key_exists('kml', $row)) {
-            $row['kml_data'] = ($row['kml'] ?? '') != '';
+            $row['kml_data'] = ($row['kml'] ?? '') !== '';
         }
 
-        if (array_key_exists('area', $row) && ($row['area'] ?? '') != '') {
-            $row['area'] = self::decodeArea($row['area']);
-        }
-
-        if (array_key_exists('points', $row) && ($row['points'] ?? '') != '') {
-            $row['points'] = self::decodePoints($row['points']);
+        foreach (['area', 'points'] as $column) {
+            if (array_key_exists($column, $row)) {
+                $row[$column] = self::geometry($row[$column]);
+            }
         }
 
         return $row;
     }
 
     /**
-     * QUIRK: v7 built `$new_area` from the decoded value and then threw it
-     * away, assigning the decoded value itself. So `area` is the whole array.
-     * Harmless by accident, and relied upon.
+     * Both columns hold a JSON array of {key, value} objects, where value is a
+     * pipe-joined list of "lat,lng" pairs. A handful of rows hold the string
+     * 'null' or raw pipe-delimited text instead; those yield an empty array
+     * rather than an error. The old code raised a 500 on the first of those,
+     * which took out any geofence page of 13 rows or more.
      */
-    private static function decodeArea(mixed $raw): mixed
+    private static function geometry(mixed $raw): array
     {
-        $decoded = json_decode((string) $raw);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
+        if ($raw === null || $raw === '') {
             return [];
         }
 
-        return $decoded;
-    }
+        $decoded = json_decode((string) $raw, true);
 
-    /**
-     * QUIRK: v7 wrote `foreach ($points as $points)`, so the loop variable
-     * shadowed the collection. After the loop `$points` held the LAST element,
-     * and that single object is what was assigned — not the array. A listing
-     * with 19 boundary points returns one object. The apps are built on this.
-     *
-     * An empty decoded array leaves the variable untouched, so `[]` stays `[]`.
-     *
-     * When the column holds the string 'null', json_decode returns NULL with
-     * no error. v7's `foreach (null)` used to raise a warning that Yii
-     * escalated into an exception, so any geofence page of 13 or more rows
-     * returned a 500 — land_id 6418 is row 13 and is in that state. The Yii
-     * app now guards the loop and emits the decoded value, which is what this
-     * returns too, so the two agree across the whole set.
-     */
-    private static function decodePoints(mixed $raw): mixed
-    {
-        $decoded = json_decode((string) $raw);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
+        if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
             return [];
         }
 
-        if (! is_iterable($decoded)) {
-            return $decoded; // see DIVERGENCE above
-        }
-
-        $last = $decoded;
-
-        foreach ($decoded as $element) {
-            $last = $element;
-        }
-
-        return $last;
+        return array_values(array_filter(
+            $decoded,
+            fn ($entry) => is_array($entry) && array_key_exists('value', $entry)
+        ));
     }
 
     /**
-     * Literal translation of v7's formatFeaturesList.
+     * The listing stores its features as "featureId-parentId" pairs in a
+     * comma separated column: "1-0,9-1,-other1,2-0,10-2". A parent of 0 is a
+     * top-level feature; anything else is a child of that feature. Entries
+     * with no id ("-other1") are free-text placeholders and carry no feature.
      *
-     * QUIRK: it indexes the selected features by the part before the dash,
-     * then tests `array_key_exists($index, ...)` using the *position* of each
-     * key feature in the loaded list rather than its id. Position and id only
-     * coincide by chance, so this returns far fewer features than it appears
-     * to intend. Translated as written: the response must not change.
+     * The old code intended to return only the top-level selections and in
+     * practice returned almost nothing, so there is no shape worth matching.
+     * Every selected feature is returned here, each carrying its parent_id, so
+     * the client can show the flat list or rebuild the tree as it prefers —
+     * nothing is dropped on its behalf.
      */
     private static function features(string $selectedList, Collection $keyFeatures): array
     {
+        if (trim($selectedList) === '') {
+            return [];
+        }
+
         $selected = [];
 
-        foreach (explode(',', $selectedList) as $feature) {
-            if (! str_contains($feature, '-')) {
+        foreach (explode(',', $selectedList) as $entry) {
+            if (! str_contains($entry, '-')) {
                 continue;
             }
 
-            [$key, $parent] = explode('-', $feature, 2);
+            [$id] = explode('-', $entry, 2);
+            $id = trim($id);
 
-            $selected[$key] = $parent;
-
-            if (str_contains($parent, 'other')) {
-                $selected[$parent] = $key;
+            if ($id === '' || ! ctype_digit($id)) {
+                continue;
             }
+
+            $selected[(int) $id] = true;
         }
 
-        $out = [];
-
-        foreach ($keyFeatures->values() as $position => $ignored) {
-            if (array_key_exists($position, $selected) && $selected[$position] == 0) {
-                $out[] = $position;
-            }
+        if ($selected === []) {
+            return [];
         }
 
-        return $out;
+        return $keyFeatures
+            ->filter(fn ($feature) => isset($selected[(int) $feature->feature_id]))
+            ->map(fn ($feature) => [
+                'id' => (int) $feature->feature_id,
+                'name' => $feature->feature,
+                'parent_id' => (int) $feature->parent_id,
+            ])
+            ->values()
+            ->all();
     }
 
     /** @param array<string,mixed> $row */
-    private static function stringifyNumerics(array $row): array
+    private static function castScalars(array $row): array
     {
-        foreach (self::STRING_COLUMNS as $column) {
+        foreach (self::INT_COLUMNS as $column) {
+            if (isset($row[$column])) {
+                $row[$column] = (int) $row[$column];
+            }
+        }
+
+        foreach (self::BOOL_COLUMNS as $column) {
             if (array_key_exists($column, $row) && $row[$column] !== null) {
-                $row[$column] = (string) $row[$column];
+                $row[$column] = (bool) (int) $row[$column];
             }
         }
 

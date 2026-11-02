@@ -6,32 +6,31 @@ use App\Http\Controllers\Api\V7\SecurityController;
 use Illuminate\Support\Facades\Route;
 
 /*
- * The shipped mobile apps have /api/v7/... baked into them, so these paths are
- * fixed. The prefix comes from bootstrap/app.php, which strips nothing: the
- * URLs here must read exactly as v7 served them.
+ * The rebuilt API.
  *
- * v7 routed by Yii's controller/action convention, which turns
- * actionLogin on SecurityController into /api/v7/security/login, and
- * accepted any verb — the action itself checked for POST and returned
- * {"error":"Invalid Request!"} otherwise. `Route::any` preserves that,
- * rather than letting Laravel return a 405 the apps have never seen.
+ * This runs on its own subdomain and is consumed by a new app build; the old
+ * domain keeps serving the old Yii application unchanged for builds already
+ * in the field. So these endpoints are free to be consistent rather than
+ * bug-compatible — see App\Support\V7\ListingRow and App\Http\ApiResponse for
+ * what changed and why.
+ *
+ * Paths are kept identical to the old ones so the app's only change is the
+ * base URL. Methods are now meaningful: a GET endpoint is a GET.
  */
 Route::prefix('v7')->group(function () {
-    // Unauthenticated: login issues the token the rest of these need.
-    Route::any('security/login', [SecurityController::class, 'login']);
+    Route::post('security/login', [SecurityController::class, 'login']);
 
-    /*
-     * Authenticated. The middleware argument records where v7 read the token
-     * from for that action — Yii's get() and post() do not fall through to
-     * each other, so an endpoint that read the query string genuinely
-     * rejected a token sent in the body. Check the original before porting.
-     */
-    Route::middleware('auth.v7:query')->group(function () {
-        Route::any('notifications/list', [NotificationsController::class, 'index']);
-        Route::any('notifications/categories', [NotificationsController::class, 'categories']);
+    Route::middleware('auth.token')->group(function () {
+        Route::get('notifications/list', [NotificationsController::class, 'index']);
+        Route::get('notifications/categories', [NotificationsController::class, 'categories']);
 
-        Route::any('listings/all', [ListingsController::class, 'all']);
-        Route::any('listings/geofence-listings', [ListingsController::class, 'geofenceListings']);
-        Route::any('listings/first-nations-listings', [ListingsController::class, 'firstNationsListings']);
+        Route::get('listings/all', [ListingsController::class, 'all']);
+        Route::get('listings/geofence-listings', [ListingsController::class, 'geofenceListings']);
+        Route::get('listings/first-nations-listings', [ListingsController::class, 'firstNationsListings']);
+        Route::get('listings/search', [ListingsController::class, 'search']);
+        Route::get('listings/detail', [ListingsController::class, 'detail']);
+        Route::get('listings/availability', [ListingsController::class, 'availability']);
+        Route::get('listings/get-blocked-days', [ListingsController::class, 'blockedDays']);
+        Route::get('listings/sun-details', [ListingsController::class, 'sunDetails']);
     });
 });

@@ -28,6 +28,10 @@ return [
 
     'env' => env('APP_ENV', 'production'),
 
+    // Interactive API docs at /docs. Open outside production; on
+    // production it must be switched on deliberately.
+    'docs_enabled' => env('DOCS_ENABLED', false),
+
     /*
     |--------------------------------------------------------------------------
     | Application Debug Mode

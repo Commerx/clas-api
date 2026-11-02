@@ -2,29 +2,26 @@
 
 namespace App\Http\Controllers\Api\V7;
 
+use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Models\KeyFeature;
+use App\Services\SunTimes;
 use App\Support\V7\ListingRow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 /**
- * Rebuild of the read endpoints on
- * modules/api/controllers/v7/ListingsController.php.
+ * Listing endpoints.
  *
- * geofence-listings is the busiest route in the system — 931 hits in the
- * production logs for the sample window — so its response shape is pinned by
- * contract tests rather than trusted. The per-row quirks live in
- * App\Support\V7\ListingRow, which documents each one.
- *
- * Authentication is the auth.v7 middleware; all three of these read the token
- * from the query string, matching v7.
+ * geofence-listings is the busiest route in the system. The old version
+ * returned a 500 for any page of 13 rows or more; see ListingRow for that and
+ * the other behaviours that changed.
  */
 class ListingsController extends Controller
 {
-    /** v7's select list for listings/all. */
-    private const ALL_COLUMNS = [
+    private const SUMMARY_COLUMNS = [
         'land.land_id', 'land.land_name', 'land.land_description', 'land.address',
         'land.coordinates', 'land.land_lat', 'land.land_lng', 'land.geofencing',
         'land.source', 'land.is_rid_land', 'land.is_first_nations',
@@ -32,7 +29,6 @@ class ListingsController extends Controller
         'land.key_features', 'land.features_list', 'land.fireban_status_id',
     ];
 
-    /** geofence-listings asks for more: activities plus the geometry columns. */
     private const GEOFENCE_COLUMNS = [
         'land.land_id', 'land.land_name', 'land.land_description', 'land.address',
         'land.coordinates', 'land.land_lat', 'land.land_lng', 'land.geofencing',
@@ -44,131 +40,337 @@ class ListingsController extends Controller
 
     public function all(Request $request): JsonResponse
     {
-        $query = $this->baseQuery(self::ALL_COLUMNS, $request)
+        $query = $this->summaryQuery($request)
             ->where('land.active', 'Y')
             ->where('land.visibility_status', 'public');
 
-        return $this->listing($request, $query, withGeometry: false);
+        return $this->listing($request, $query, self::SUMMARY_COLUMNS, withGeometry: false);
     }
 
     public function geofenceListings(Request $request): JsonResponse
     {
-        $query = $this->baseQuery(self::GEOFENCE_COLUMNS, $request)
+        $query = $this->summaryQuery($request)
             ->where('land.active', 'Y')
             ->where('land.geofencing', 'Yes');
 
-        return $this->listing($request, $query, withGeometry: true);
+        return $this->listing($request, $query, self::GEOFENCE_COLUMNS, withGeometry: true);
     }
 
-    /**
-     * No photos join, no grouping, no geometry and no `after` filter — v7
-     * builds this one differently from the other two.
-     */
     public function firstNationsListings(Request $request): JsonResponse
     {
         $query = DB::table('land')
-            ->select(['land.land_id', 'land.source', 'land.kml', 'land.fn_land_code', 'land.kml_file_exists'])
             ->where('land.active', 'Y')
             ->where('land.is_first_nations', 1)
             ->where('land.source', 'FirstNationLandsAB')
             ->where('land.kml', '!=', '')
             ->orderByDesc('land.land_id');
 
-        return $this->listing($request, $query, withGeometry: false);
+        return $this->listing(
+            $request,
+            $query,
+            ['land.land_id', 'land.source', 'land.kml', 'land.fn_land_code', 'land.kml_file_exists'],
+            withGeometry: false,
+            paginate: false,
+        );
     }
 
-    private function baseQuery(array $columns, Request $request)
+    public function search(Request $request): JsonResponse
     {
-        $after = $request->query('after', 0);
+        $query = $this->summaryQuery($request)
+            ->where('land.active', 'Y')
+            ->where('land.visibility_status', 'public');
 
-        return DB::table('land')
-            ->select(array_merge($columns, [DB::raw('GROUP_CONCAT(photos.photo_name) AS photos')]))
+        // Each whitespace-separated word may match the name, the description
+        // or the address. The old code built three condition groups and then
+        // appended every term to the first one, which happened to produce
+        // this same OR — kept, because it is the sensible reading.
+        if (($keyword = trim((string) $request->input('q', ''))) !== '') {
+            $query->where(function ($outer) use ($keyword) {
+                foreach (preg_split('/\s+/', $keyword) as $word) {
+                    foreach (['land_name', 'land_description', 'address'] as $column) {
+                        $outer->orWhere($column, 'like', '%'.$word.'%');
+                    }
+                }
+            });
+        }
+
+        if (($feature = trim((string) $request->input('f', ''))) !== '') {
+            $query->where('features_list', 'like', '%'.$feature.'%');
+        }
+
+        return $this->listing($request, $query, self::SUMMARY_COLUMNS, withGeometry: false);
+    }
+
+    public function detail(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $row = DB::table('land')
+            ->select(array_merge(['land.*'], [DB::raw('GROUP_CONCAT(photos.photo_name) AS photos')]))
             ->leftJoin('photos', 'photos.land_id', '=', 'land.land_id')
-            ->where('updated_at', '>=', $after)
+            ->where('land.active', 'Y')
+            ->where('land.land_id', (int) $request->input('id'))
+            ->groupBy('land.land_id')
+            ->first();
+
+        if ($row === null) {
+            return ApiResponse::notFound('No such listing.');
+        }
+
+        $item = ListingRow::format((array) $row, KeyFeature::activeOrdered(), withGeometry: true);
+
+        // Only First Nations listings with a published KML get a URL.
+        $item['kml_url'] = ($item['kml_file_exists'] ?? false)
+            && ! empty($item['fn_land_code'])
+            && ($item['is_first_nations'] ?? false)
+                ? rtrim(config('app.url'), '/').'/uploads/kml/'.$item['fn_land_code'].'.kml'
+                : null;
+
+        $item['is_subscribed'] = DB::table('land_notification_subscriptions')
+            ->where('land_id', $item['land_id'])
+            ->where('user_id', $request->attributes->get('api_user')->id)
+            ->exists();
+
+        return ApiResponse::data(['item' => $item]);
+    }
+
+    /**
+     * Which days of this listing are blocked by the owner, and how full the
+     * bookable days are. Percentages are bucketed to 25/50/75/100 as the
+     * client renders them as a fill level, not a precise figure.
+     */
+    public function availability(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $land = DB::table('land')->where('land_id', (int) $request->input('id'))->first();
+
+        if ($land === null) {
+            return ApiResponse::notFound('No such listing.');
+        }
+
+        $allowed = $this->allowedCount($land);
+        $monthStart = date('Y-m-01');
+
+        $requests = DB::table('requests')
+            ->select(['request_date', 'people_count', 'units_count'])
+            ->where('land_id', $land->land_id)
+            ->whereIn('status', ['Accepted', 'Checked In', 'Checked Out'])
+            ->where('request_date', '>=', $monthStart)
+            ->get();
+
+        $perDay = [];
+
+        foreach ($requests as $row) {
+            // An open property counts vehicles; a private one counts people.
+            // Either way a booking counts as at least one.
+            $count = $land->is_open_property
+                ? max(1, (int) $row->units_count)
+                : max(1, (int) $row->people_count);
+
+            $perDay[$row->request_date] = ($perDay[$row->request_date] ?? 0) + $count;
+        }
+
+        $percentFilled = [];
+
+        foreach ($perDay as $date => $count) {
+            if ($allowed <= 0) {
+                continue;
+            }
+
+            $percentFilled[$date] = match (true) {
+                $count >= $allowed => 100,
+                ($pct = (int) ceil(($count / $allowed) * 100)) > 50 => 75,
+                $pct > 25 => 50,
+                $pct > 0 => 25,
+                default => 0,
+            };
+        }
+
+        // Owner-blocked days apply to private listings only; an open property
+        // uses per-activity limits instead.
+        $blocked = $land->is_open_property
+            ? []
+            : DB::table('land_blocked_days')
+                ->where('land_id', $land->land_id)
+                ->where('blocked_date', '>=', date('Y-m-d'))
+                ->orderBy('blocked_date')
+                ->pluck('blocked_date')
+                ->all();
+
+        return ApiResponse::data([
+            'blocked' => $blocked,
+            'percent_filled' => $percentFilled,
+        ]);
+    }
+
+    public function blockedDays(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'land_id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $landId = (int) $request->input('land_id');
+
+        if (! DB::table('land')->where('land_id', $landId)->exists()) {
+            return ApiResponse::notFound('No such listing.');
+        }
+
+        $days = DB::table('land_blocked_days')
+            ->select(['id', 'blocked_date', 'open_property_limits'])
+            ->where('land_id', $landId)
+            ->orderBy('blocked_date')
+            ->get()
+            ->map(function ($day) {
+                $limits = $day->open_property_limits;
+
+                return [
+                    'id' => (int) $day->id,
+                    'blocked_date' => $day->blocked_date,
+                    'open_property_limits' => $limits
+                        ? (json_decode($limits, true) ?: null)
+                        : null,
+                ];
+            })
+            ->all();
+
+        return ApiResponse::data([
+            'total' => count($days),
+            'blocked_days' => $days,
+        ]);
+    }
+
+    public function sunDetails(Request $request, SunTimes $sun): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        return ApiResponse::data($sun->forLocation(
+            (float) $request->input('lat'),
+            (float) $request->input('lng'),
+        ));
+    }
+
+    private function summaryQuery(Request $request)
+    {
+        return DB::table('land')
+            ->leftJoin('photos', 'photos.land_id', '=', 'land.land_id')
+            ->where('land.updated_at', '>=', (int) $request->input('after', 0))
             ->groupBy('land.land_id')
             ->orderByDesc('land.land_id');
     }
 
-    private function listing(Request $request, $query, bool $withGeometry): JsonResponse
-    {
-        $user = $request->attributes->get('v7_user');
+    private function listing(
+        Request $request,
+        $query,
+        array $columns,
+        bool $withGeometry,
+        bool $paginate = true,
+    ): JsonResponse {
+        $this->rememberUserPosition($request);
 
-        $this->rememberUserPosition($request, $user);
+        $query->select(array_merge($columns, in_array('land.land_id', $columns, true)
+            && ! in_array('land.fn_land_code', $columns, true)
+                ? [DB::raw('GROUP_CONCAT(photos.photo_name) AS photos')]
+                : []));
 
-        // v7 applies these only when truthy, so start=0 and an absent limit
-        // mean "no clause" rather than OFFSET 0 / LIMIT 0.
-        $start = (int) $request->query('start', 0);
-        $limit = $request->query('limit', '');
+        if ($paginate) {
+            $start = (int) $request->input('start', 0);
+            $limit = (int) $request->input('limit', 0);
 
-        if ($start) {
-            $query->offset($start);
-        }
+            if ($start > 0) {
+                $query->offset($start);
+            }
 
-        if ($limit !== '' && (int) $limit !== 0) {
-            $query->limit((int) $limit);
-        }
-
-        $rows = $query->get();
-
-        // v7 returns an empty items list without loading key features at all.
-        if ($rows->isEmpty()) {
-            return new JsonResponse([
-                'error' => '',
-                'success' => true,
-                'data' => ['items' => []],
-            ]);
+            if ($limit > 0) {
+                $query->limit(min($limit, 500));
+            }
         }
 
         $keyFeatures = KeyFeature::activeOrdered();
 
-        $items = $rows
+        $items = $query->get()
             ->map(fn ($row) => ListingRow::format((array) $row, $keyFeatures, $withGeometry))
             ->all();
 
-        return new JsonResponse([
-            'error' => '',
-            'success' => true,
-            'data' => ['items' => $items],
-        ]);
+        return ApiResponse::data(['items' => $items]);
     }
 
     /**
      * These endpoints double as a position report: when the caller sends
-     * coordinates, v7 writes them to the user's profile.
-     *
-     * The validation is the fix applied to the Yii app in the SQL injection
-     * remediation — the values used to be written unchecked, which made a
-     * non-numeric latitude a 500 from a strict-mode column error.
+     * coordinates, they are written to the user's profile.
      */
-    private function rememberUserPosition(Request $request, object $user): void
+    private function rememberUserPosition(Request $request): void
     {
-        $lat = $request->query('user_lat', 0);
-        $lng = $request->query('user_lng', 0);
-
-        if (! $lat || ! $lng) {
-            return;
-        }
-
-        $lat = $this->coordinate($lat, 90);
-        $lng = $this->coordinate($lng, 180);
+        $lat = $this->coordinate($request->input('user_lat'), 90);
+        $lng = $this->coordinate($request->input('user_lng'), 180);
 
         if ($lat === null || $lng === null) {
             return;
         }
 
         DB::table('profile')
-            ->where('user_id', $user->id)
+            ->where('user_id', $request->attributes->get('api_user')->id)
             ->update(['user_lat' => $lat, 'user_lng' => $lng]);
     }
 
     private function coordinate(mixed $value, float $max): ?float
     {
-        if (! is_numeric($value)) {
+        if ($value === null || $value === '' || ! is_numeric($value)) {
             return null;
         }
 
         $value = (float) $value;
 
         return ($value < -$max || $value > $max) ? null : $value;
+    }
+
+    /**
+     * How many bookings a listing accepts per day. A private listing uses
+     * people_allowed; an open property sums its per-activity limits.
+     */
+    private function allowedCount(object $land): int
+    {
+        if (! $land->is_open_property) {
+            return (int) $land->people_allowed;
+        }
+
+        $limits = DB::table('land_access_limits')
+            ->where('land_id', $land->land_id)
+            ->first();
+
+        if ($limits === null) {
+            return (int) $land->people_allowed;
+        }
+
+        $total = 0;
+
+        foreach (['foot', 'hunting', 'fishing', 'ohv', 'horse', 'snowmobile'] as $activity) {
+            $total += (int) ($limits->{$activity} ?? 0);
+        }
+
+        return $total;
     }
 }
