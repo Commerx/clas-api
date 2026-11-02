@@ -32,5 +32,16 @@ Route::prefix('v7')->group(function () {
         Route::get('listings/availability', [ListingsController::class, 'availability']);
         Route::get('listings/get-blocked-days', [ListingsController::class, 'blockedDays']);
         Route::get('listings/sun-details', [ListingsController::class, 'sunDetails']);
+
+        /*
+         * Writes. These share the clas database with the old application, so
+         * the rows they create are identical to the ones it created — only
+         * the responses and status codes differ.
+         */
+        Route::post('listings/subscribe', [ListingsController::class, 'subscribe']);
+        Route::post('listings/unsubscribe', [ListingsController::class, 'unsubscribe']);
+        Route::post('listings/block-day', [ListingsController::class, 'blockDay']);
+        Route::post('listings/unblock-day', [ListingsController::class, 'unblockDay']);
+        Route::post('listings/block-multiple-days', [ListingsController::class, 'blockMultipleDays']);
     });
 });

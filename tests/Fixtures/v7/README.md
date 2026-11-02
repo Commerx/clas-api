@@ -20,6 +20,12 @@ It reads the live `clas` schema, because the whole API does — `phpunit.xml`
 points the suite at in-memory sqlite, which has none of the legacy tables, so
 the test overrides the connection in `setUp`. Nothing in it writes.
 
+`tests/Feature/Api/V7/ListingWriteTest.php` covers the write endpoints. These
+**mutate the shared database**, so every row they create belongs to the fixture
+account and the fixture listing, and `tearDown` removes it — a failed run does
+not leave state for the next one. One test asserts the written row carries the
+same columns the old application would have set.
+
 ## What documents the differences
 
 `tools/contract-report.php` calls both implementations with the same input and
@@ -33,6 +39,11 @@ php tools/contract-report.php https://old.example.com https://api.example.com
 
 The request matrix lives in `tools/contract-cases.php`. Credentials are
 resolved from the database at runtime, so no real token is committed.
+
+It covers **reads only**, deliberately. Calling a write endpoint against both
+implementations would have each one mutate the state the other then reads, so
+the second call would be answering a different question from the first. Write
+behaviour is asserted by `ListingWriteTest` instead, against this API alone.
 
 Current output: 25 of 25 responses differ. Among them:
 
@@ -79,6 +90,20 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 ```
 
 Generate the hash with `password_hash('ContractTest123!', PASSWORD_BCRYPT, ['cost' => 10])`.
+
+The write tests also need a listing that account **owns**, so they can exercise
+the owner-only endpoints without touching anyone's real property:
+
+```sql
+-- local/dev databases only
+INSERT INTO land (owner, land_name, people_allowed, active, visibility_status,
+                  geofencing, land_lat, land_lng, is_open_property,
+                  created_at, updated_at)
+SELECT id, 'Contract Fixture Land', 10, 'Y', 'public', 'No',
+       49.9, -114.1, 0, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()
+FROM user WHERE username = 'contract_fixture'
+  AND NOT EXISTS (SELECT 1 FROM land WHERE land_name = 'Contract Fixture Land');
+```
 The tests skip rather than fail when the account or the database is absent.
 
 ## Password compatibility

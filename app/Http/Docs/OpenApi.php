@@ -219,6 +219,34 @@ MD;
     }
 
     /** Keyed by status code, so it merges with failures() into `responses`. */
+    /**
+     * A form-encoded request body. The app posts these as
+     * application/x-www-form-urlencoded, so the docs show them that way.
+     *
+     * @param  array<string,string>  $fields  name => description
+     * @param  list<string>  $required
+     */
+    private static function formBody(array $fields, array $required): array
+    {
+        $properties = [];
+
+        foreach ($fields as $name => $description) {
+            $properties[$name] = $name === 'dates'
+                ? ['type' => 'array', 'items' => ['type' => 'string', 'format' => 'date'],
+                    'description' => $description]
+                : ['type' => 'string', 'description' => $description];
+        }
+
+        return [
+            'required' => true,
+            'content' => ['application/x-www-form-urlencoded' => ['schema' => [
+                'type' => 'object',
+                'required' => $required,
+                'properties' => $properties,
+            ]]],
+        ];
+    }
+
     private static function ok(string $description, array $schema): array
     {
         return [
@@ -417,6 +445,118 @@ MD;
                 ]) + self::failures([
                     401 => 'Missing, unknown or mismatched token.',
                     422 => 'Coordinates missing or out of range.',
+                ]),
+            ]],
+
+            '/api/v7/listings/subscribe' => ['post' => [
+                'tags' => ['Listings'],
+                'summary' => 'Subscribe to a listing\'s notifications',
+                'requestBody' => self::formBody(['id' => 'Land id.'], ['id']),
+                'responses' => self::ok('The listing, with is_subscribed true.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ListingWithGeometry']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing.',
+                    409 => 'Already subscribed.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/listings/unsubscribe' => ['post' => [
+                'tags' => ['Listings'],
+                'summary' => 'Stop receiving a listing\'s notifications',
+                'requestBody' => self::formBody(['id' => 'Land id.'], ['id']),
+                'responses' => self::ok('The listing, with is_subscribed false.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ListingWithGeometry']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing.',
+                    409 => 'Not subscribed.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/listings/block-day' => ['post' => [
+                'tags' => ['Listings'],
+                'summary' => 'Block one day on a listing you own',
+                'description' => 'Owner only. `open_property_limits` is stored '
+                    .'only for open properties and is ignored otherwise.',
+                'requestBody' => self::formBody([
+                    'land_id' => 'Land id.',
+                    'date' => 'YYYY-MM-DD.',
+                    'open_property_limits' => 'Per-activity limits, open properties only.',
+                ], ['land_id', 'date']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'The day is now blocked.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => ['blocked_day' => [
+                                        'type' => 'object',
+                                        'properties' => [
+                                            'id' => ['type' => 'integer'],
+                                            'blocked_date' => ['type' => 'string', 'format' => 'date'],
+                                        ],
+                                    ]],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    403 => 'You do not own this listing.',
+                    404 => 'No such listing.',
+                    409 => 'That day is already blocked.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/listings/unblock-day' => ['post' => [
+                'tags' => ['Listings'],
+                'summary' => 'Unblock a day on a listing you own',
+                'requestBody' => self::formBody([
+                    'land_id' => 'Land id.',
+                    'date' => 'YYYY-MM-DD.',
+                ], ['land_id', 'date']),
+                'responses' => self::ok('How many entries were removed.', [
+                    'type' => 'object',
+                    'properties' => ['unblocked' => ['type' => 'integer']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    403 => 'You do not own this listing.',
+                    404 => 'No such listing, or that day is not blocked.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/listings/block-multiple-days' => ['post' => [
+                'tags' => ['Listings'],
+                'summary' => 'Block several days at once',
+                'description' => 'Days already blocked are reported in `skipped` '
+                    .'rather than failing the request, so retrying a partially '
+                    .'applied batch converges. Duplicates in `dates` are ignored. '
+                    .'The inserts run in one transaction.',
+                'requestBody' => self::formBody([
+                    'land_id' => 'Land id.',
+                    'dates' => 'Array of YYYY-MM-DD.',
+                    'open_property_limits' => 'Per-activity limits, open properties only.',
+                ], ['land_id', 'dates']),
+                'responses' => self::ok('Which days were blocked and which already were.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'blocked' => ['type' => 'array', 'items' => ['type' => 'string', 'format' => 'date']],
+                        'skipped' => ['type' => 'array', 'items' => ['type' => 'string', 'format' => 'date']],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    403 => 'You do not own this listing.',
+                    404 => 'No such listing.',
+                    422 => 'Parameters failed validation.',
                 ]),
             ]],
 
