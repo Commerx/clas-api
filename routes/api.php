@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V7\ListingsController;
 use App\Http\Controllers\Api\V7\NotificationsController;
+use App\Http\Controllers\Api\V7\RequestsController;
 use App\Http\Controllers\Api\V7\SecurityController;
 use Illuminate\Support\Facades\Route;
 
@@ -32,6 +33,13 @@ Route::prefix('v7')->group(function () {
         Route::get('listings/availability', [ListingsController::class, 'availability']);
         Route::get('listings/get-blocked-days', [ListingsController::class, 'blockedDays']);
         Route::get('listings/sun-details', [ListingsController::class, 'sunDetails']);
+
+        Route::get('requests/unread-counts', [RequestsController::class, 'unreadCounts']);
+        Route::get('requests/list', [RequestsController::class, 'index']);
+        Route::get('requests/mine', [RequestsController::class, 'mine']);
+        Route::get('requests/bookings', [RequestsController::class, 'bookings']);
+        Route::get('requests/listing-bookings', [RequestsController::class, 'listingBookings']);
+        Route::get('requests/detail', [RequestsController::class, 'detail']);
 
         /*
          * Writes. These share the clas database with the old application, so

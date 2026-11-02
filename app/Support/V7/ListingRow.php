@@ -55,9 +55,7 @@ class ListingRow
 
         if (array_key_exists('photos', $row)) {
             // GROUP_CONCAT gives one comma-joined string, or null for none.
-            $row['photos'] = $row['photos'] === null || $row['photos'] === ''
-                ? []
-                : explode(',', (string) $row['photos']);
+            $row['photos'] = self::photos($row['photos']);
         }
 
         if (! $withGeometry) {
@@ -84,7 +82,7 @@ class ListingRow
      * rather than an error. The old code raised a 500 on the first of those,
      * which took out any geofence page of 13 rows or more.
      */
-    private static function geometry(mixed $raw): array
+    public static function geometry(mixed $raw): array
     {
         if ($raw === null || $raw === '') {
             return [];
@@ -168,5 +166,13 @@ class ListingRow
         }
 
         return $row;
+    }
+
+    /** GROUP_CONCAT gives one comma-joined string, or null for none. */
+    public static function photos(mixed $raw): array
+    {
+        return $raw === null || $raw === ''
+            ? []
+            : explode(',', (string) $raw);
     }
 }

@@ -6,6 +6,7 @@ use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Models\KeyFeature;
 use App\Services\SunTimes;
+use App\Support\V7\ListingAccess;
 use App\Support\V7\ListingRow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,6 +28,40 @@ class ListingsController extends Controller
         'land.source', 'land.is_rid_land', 'land.is_first_nations',
         'land.is_open_property', 'land.contact_email', 'land.barcode', 'land.owner',
         'land.key_features', 'land.features_list', 'land.fireban_status_id',
+    ];
+
+    /**
+     * Everything `listings/detail` returns.
+     *
+     * This is an allowlist, not an exclusion list, and deliberately so. The
+     * old API selected `land.*`, which published every column the table ever
+     * grows — including `claim_code`, the secret that lets whoever presents it
+     * take ownership of a listing, set on 6,131 rows; `supersede_emails_*`,
+     * which hold real email addresses; and the payment columns
+     * (`txn_number`, `customer_id`, `order_id`, `paid_amount`).
+     *
+     * An allowlist fails closed: a column added to `land` is absent from the
+     * API until someone adds it here, which is the safe direction. A missing
+     * field shows up the first time a client looks for it; a leaked secret
+     * does not show up at all.
+     */
+    private const DETAIL_COLUMNS = [
+        'land.land_id', 'land.owner', 'land.land_name', 'land.land_description',
+        'land.address', 'land.contact_email', 'land.contact_phone',
+        'land.coordinates', 'land.land_lat', 'land.land_lng',
+        'land.total_deeded', 'land.access_points',
+        'land.signage_type', 'land.required_signages', 'land.additional_signages',
+        'land.recreation_access_allowed', 'land.people_allowed',
+        'land.requests_allowed', 'land.allowed_activities',
+        'land.allowed_activities_text', 'land.key_features', 'land.features_list',
+        'land.barcode', 'land.auto_approve_requests', 'land.allow_guide',
+        'land.allow_unlimited_access', 'land.created_at', 'land.updated_at',
+        'land.status', 'land.is_first_nations', 'land.is_open_property',
+        'land.kml_file_exists', 'land.fn_land_code', 'land.is_rid_land',
+        'land.visibility_status', 'land.active', 'land.kml', 'land.geofencing',
+        'land.geo_json', 'land.conservationSiteID', 'land.siteData',
+        'land.source', 'land.map_pdf', 'land.camp_sites', 'land.area',
+        'land.points', 'land.fireban_status_id',
     ];
 
     private const GEOFENCE_COLUMNS = [
@@ -354,12 +389,19 @@ class ListingsController extends Controller
             return [null, ApiResponse::notFound('No such listing.')];
         }
 
-        if ((int) $land->owner !== (int) $request->attributes->get('api_user')->id) {
+        if (! ListingAccess::isOwner($this->userId($request), $landId)) {
             // 403, not 401: the caller is authenticated, just not the owner.
+            // Deliberately owner-only, not owner-or-manager: that is what the
+            // old application enforced, and writes must stay identical.
             return [null, ApiResponse::error('Only the owner can change this listing.', 403)];
         }
 
         return [$land, null];
+    }
+
+    private function userId(Request $request): int
+    {
+        return (int) $request->attributes->get('api_user')->id;
     }
 
     private function activeListingExists(int $landId): bool
@@ -374,7 +416,10 @@ class ListingsController extends Controller
     private function listingPayload(int $landId, int $userId): ?array
     {
         $row = DB::table('land')
-            ->select(['land.*', DB::raw('GROUP_CONCAT(photos.photo_name) AS photos')])
+            ->select(array_merge(
+                self::DETAIL_COLUMNS,
+                [DB::raw('GROUP_CONCAT(photos.photo_name) AS photos')],
+            ))
             ->leftJoin('photos', 'photos.land_id', '=', 'land.land_id')
             ->where('land.active', 'Y')
             ->where('land.land_id', $landId)
@@ -490,7 +535,14 @@ class ListingsController extends Controller
 
         $landId = (int) $request->input('land_id');
 
-        if (! DB::table('land')->where('land_id', $landId)->exists()) {
+        // Owner or manager only. Blocking and unblocking a day already
+        // required that; reading the schedule back did not, which let any
+        // account enumerate when any listing was closed and on what terms.
+        // Requesters get what they need from listings/availability instead.
+        //
+        // 404 rather than 403, so the existence of a listing is not
+        // confirmed to someone with no claim to it.
+        if (! ListingAccess::canManage($this->userId($request), $landId)) {
             return ApiResponse::notFound('No such listing.');
         }
 

@@ -42,6 +42,7 @@ class OpenApi
             'tags' => [
                 ['name' => 'Security', 'description' => 'Authentication'],
                 ['name' => 'Listings', 'description' => 'Land listings, availability and daylight'],
+                ['name' => 'Requests', 'description' => 'Access requests and bookings'],
                 ['name' => 'Notifications', 'description' => 'User notifications'],
             ],
             'paths' => self::paths(),
@@ -93,6 +94,16 @@ These are deliberate, and are why a new app build is needed.
   locally and were an hour out before, on a feature used to plan travel
   around daylight.
 * **Validation errors are 422** and name the field.
+* **Responses carry an allowlist of fields, not `SELECT *`.** `listings/detail`
+  returns 52 fields where the old API returned 75: `claim_code`, the payment
+  columns, `supersede_emails_*` and the signage internals are withheld.
+  `claim_code` is the secret that lets whoever holds it take ownership of a
+  listing, and it was readable for 6,131 listings by any authenticated caller.
+* **Object access is checked.** `requests/detail` is visible to the requester
+  and to anyone who owns or manages the listing; `listings/get-blocked-days`
+  to the owner or a manager. Both answered any caller before. Where access is
+  refused the answer is 404, so the existence of a record is not confirmed to
+  someone who cannot see it.
 MD;
     }
 
@@ -157,6 +168,28 @@ MD;
                         'description' => 'Pipe-separated "lat,lng" pairs.',
                         'examples' => ['51.96,-112.69|51.94,-112.69'],
                     ],
+                ],
+            ],
+            'RequestSummary' => [
+                'type' => 'object',
+                'properties' => [
+                    'request_id' => ['type' => 'integer'],
+                    'request_date' => ['type' => 'string', 'format' => 'date'],
+                    'status' => [
+                        'type' => 'string',
+                        'examples' => ['Pending', 'Accepted', 'Declined', 'Checked In', 'Checked Out', 'Expired'],
+                    ],
+                    'reason' => ['type' => 'string', 'nullable' => true],
+                    'checkedin_datetime' => ['type' => 'string', 'nullable' => true],
+                    'checkedout_datetime' => ['type' => 'string', 'nullable' => true],
+                    'is_user_read' => ['type' => 'boolean'],
+                    'is_owner_read' => ['type' => 'boolean'],
+                    'requested_at' => ['type' => 'integer', 'description' => 'Unix timestamp.'],
+                    'land_id' => ['type' => 'integer'],
+                    'land_name' => ['type' => 'string', 'nullable' => true],
+                    'photos' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'area' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/GeometryEntry']],
+                    'points' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/GeometryEntry']],
                 ],
             ],
             'ListingSummary' => [
@@ -556,6 +589,98 @@ MD;
                     401 => 'Missing, unknown or mismatched token.',
                     403 => 'You do not own this listing.',
                     404 => 'No such listing.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/unread-counts' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'How many requests await attention, on each side',
+                'description' => 'A user is the requester on their own bookings and the '
+                    .'owner side on listings they own or manage. Both counts are '
+                    .'integers; the old API returned them as strings.',
+                'responses' => self::ok('Unread counts.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'requester_unread' => ['type' => 'integer'],
+                        'owner_unread' => ['type' => 'integer'],
+                    ],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/api/v7/requests/list' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'Every request the caller has made',
+                'parameters' => [
+                    self::param('limit', 'integer', 'Maximum rows; capped at 500.'),
+                    self::param('start', 'integer', 'Rows to skip.'),
+                ],
+                'responses' => self::ok('Requests with their listing.',
+                    self::itemsOf('#/components/schemas/RequestSummary'))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/api/v7/requests/mine' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'The caller\'s requests, excluding expired ones',
+                'parameters' => [
+                    self::param('limit', 'integer', 'Maximum rows; capped at 500.'),
+                    self::param('start', 'integer', 'Rows to skip.'),
+                ],
+                'responses' => self::ok('Active requests.',
+                    self::itemsOf('#/components/schemas/RequestSummary'))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/api/v7/requests/bookings' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'Requests against listings the caller owns or manages',
+                'description' => 'Includes listings taken down, since an owner still '
+                    .'needs to see requests against them. Being a land manager grants '
+                    .'the same access as ownership.',
+                'parameters' => [
+                    self::param('limit', 'integer', 'Maximum rows; capped at 500.'),
+                    self::param('start', 'integer', 'Rows to skip.'),
+                ],
+                'responses' => self::ok('Requests across all accessible listings.',
+                    self::itemsOf('#/components/schemas/RequestSummary'))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/api/v7/requests/listing-bookings' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'Requests against one listing the caller owns or manages',
+                'description' => 'Answers 404 rather than 403 when the caller has no '
+                    .'access, so the existence of a listing is not confirmed to '
+                    .'someone who cannot see it.',
+                'parameters' => [
+                    self::param('id', 'integer', 'Land id.', true),
+                    self::param('limit', 'integer', 'Maximum rows; capped at 500.'),
+                    self::param('start', 'integer', 'Rows to skip.'),
+                ],
+                'responses' => self::ok('Requests for that listing.',
+                    self::itemsOf('#/components/schemas/RequestSummary')) + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        404 => 'No such listing, or no access to it.',
+                        422 => 'Parameters failed validation.',
+                    ]),
+            ]],
+
+            '/api/v7/requests/detail' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'One request in full',
+                'description' => 'Visible to the requester, and to anyone who owns or '
+                    .'manages the listing. **The old API checked neither and returned '
+                    .'any request to any authenticated caller**, including the '
+                    .'requester\'s name, phone, address, coordinates, vehicle and '
+                    .'driver licence number.',
+                'parameters' => [self::param('request_id', 'integer', 'Request id.', true)],
+                'responses' => self::ok('The request, its listing and the requester profile.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/RequestSummary']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or no access to it.',
                     422 => 'Parameters failed validation.',
                 ]),
             ]],
