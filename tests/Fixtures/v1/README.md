@@ -7,7 +7,7 @@ tested against it.
 
 ## What asserts the contract
 
-`tests/Feature/Api/V7/ApiContractTest.php`. It checks the envelope and its key
+`tests/Feature/Api/V1/ApiContractTest.php`. It checks the envelope and its key
 order, the status codes, that ids are integers and flags are booleans, that
 geometry fields are always lists, and that a token obtained from `login` works
 as a bearer token.
@@ -20,7 +20,7 @@ It reads the live `clas` schema, because the whole API does — `phpunit.xml`
 points the suite at in-memory sqlite, which has none of the legacy tables, so
 the test overrides the connection in `setUp`. Nothing in it writes.
 
-`tests/Feature/Api/V7/ListingWriteTest.php` covers the write endpoints. These
+`tests/Feature/Api/V1/ListingWriteTest.php` covers the write endpoints. These
 **mutate the shared database**, so every row they create belongs to the fixture
 account and the fixture listing, and `tearDown` removes it — a failed run does
 not leave state for the next one. One test asserts the written row carries the

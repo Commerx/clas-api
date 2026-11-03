@@ -1,8 +1,8 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
-use App\Support\V7\ListingAccess;
+use App\Support\V1\ListingAccess;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 

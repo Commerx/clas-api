@@ -2,14 +2,14 @@
 
 /**
  * The request matrix used by tools/contract-diff.php and by
- * tests/Feature/Api/V7/ContractParityTest.php.
+ * tests/Feature/Api/V1/ContractParityTest.php.
  *
  * Add a case per endpoint as it is rebuilt.
  *
  * Credentials are resolved from the database at runtime rather than written
  * here, so no real token ever lands in the repository:
  *
- *   __UID__          the local fixture account (see tests/Fixtures/v7/README.md)
+ *   __UID__          the local fixture account (see tests/Fixtures/v1/README.md)
  *   __TOKEN__        its auth_key
  *   __NOTIF_UID__    some account that actually has notifications, so the
  *   __NOTIF_TOKEN__  list endpoint is exercised with rows rather than []
@@ -65,89 +65,89 @@ $resolve = static function (): array {
 $cases = [
     'login / valid by username' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => $fixtureLogin, 'password' => $fixturePass, 'os' => 'android'],
     ],
     'login / valid by email' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => $fixtureEmail, 'password' => $fixturePass, 'os' => 'android'],
     ],
     'login / wrong password' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => $fixtureLogin, 'password' => 'definitely-wrong', 'os' => 'android'],
     ],
     'login / unknown user' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => 'nobody-here-at-all', 'password' => 'x', 'os' => 'ios'],
     ],
     'login / missing os' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => $fixtureLogin, 'password' => $fixturePass],
     ],
     'login / missing password' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['login' => $fixtureLogin, 'os' => 'android'],
     ],
     'login / missing login' => [
         'method' => 'POST',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
         'body' => ['password' => $fixturePass, 'os' => 'android'],
     ],
     'login / GET instead of POST' => [
         'method' => 'GET',
-        'path' => 'api/v7/security/login',
+        'path' => 'v1/security/login',
     ],
 
-    // Token middleware. v7 performs this check inside every action, so these
+    // Token middleware. The old API performs this check inside every action, so these
     // pin the error strings, their order, and the fact that an auth failure is
     // HTTP 200 with an error body rather than a 401.
     'auth / no credentials' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list',
+        'path' => 'v1/notifications/list',
     ],
     'auth / token only' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=__TOKEN__',
+        'path' => 'v1/notifications/list?token=__TOKEN__',
     ],
     'auth / uid only' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?uid=__UID__',
+        'path' => 'v1/notifications/list?uid=__UID__',
     ],
     'auth / wrong token' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=deadbeefdeadbeefdeadbeefdeadbeef&uid=__UID__',
+        'path' => 'v1/notifications/list?token=deadbeefdeadbeefdeadbeefdeadbeef&uid=__UID__',
     ],
     'auth / mismatched uid' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=__TOKEN__&uid=999999',
+        'path' => 'v1/notifications/list?token=__TOKEN__&uid=999999',
     ],
     'auth / non-numeric uid' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=__TOKEN__&uid=abc',
+        'path' => 'v1/notifications/list?token=__TOKEN__&uid=abc',
     ],
 
     'notifications / list (empty)' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=__TOKEN__&uid=__UID__',
+        'path' => 'v1/notifications/list?token=__TOKEN__&uid=__UID__',
     ],
     'notifications / list (with rows)' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/list?token=__NOTIF_TOKEN__&uid=__NOTIF_UID__&limit=3',
+        'path' => 'v1/notifications/list?token=__NOTIF_TOKEN__&uid=__NOTIF_UID__&limit=3',
     ],
     'notifications / categories' => [
         'method' => 'GET',
-        'path' => 'api/v7/notifications/categories?token=__TOKEN__&uid=__UID__',
+        'path' => 'v1/notifications/categories?token=__TOKEN__&uid=__UID__',
     ],
 
     /*
      * Listings.
      *
-     * geofence-listings used to return a 500 from v7 for any page of 13 or
+     * geofence-listings used to return a 500 from the old API for any page of 13 or
      * more rows: land_id 6418 holds the string 'null' in its points column,
      * json_decode returns NULL without error, and foreach(null) raised a
      * warning that Yii escalated. The Yii app now guards that loop, so the
@@ -156,35 +156,35 @@ $cases = [
      */
     'listings / all' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/all?token=__TOKEN__&uid=__UID__&limit=5',
+        'path' => 'v1/listings/all?token=__TOKEN__&uid=__UID__&limit=5',
     ],
     'listings / all with position' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/all?token=__TOKEN__&uid=__UID__&limit=3&user_lat=49.90261265&user_lng=-114.12588656',
+        'path' => 'v1/listings/all?token=__TOKEN__&uid=__UID__&limit=3&user_lat=49.90261265&user_lng=-114.12588656',
     ],
     'listings / all with start offset' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/all?token=__TOKEN__&uid=__UID__&limit=3&start=5',
+        'path' => 'v1/listings/all?token=__TOKEN__&uid=__UID__&limit=3&start=5',
     ],
     'listings / geofence (10 rows, below the bad row)' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=10',
+        'path' => 'v1/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=10',
     ],
     'listings / geofence past the previously-crashing row' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=20',
+        'path' => 'v1/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=20',
     ],
     'listings / geofence whole set' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/geofence-listings?token=__TOKEN__&uid=__UID__',
+        'path' => 'v1/listings/geofence-listings?token=__TOKEN__&uid=__UID__',
     ],
     'listings / geofence with position' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=4&user_lat=49.90261265&user_lng=-114.12588656',
+        'path' => 'v1/listings/geofence-listings?token=__TOKEN__&uid=__UID__&limit=4&user_lat=49.90261265&user_lng=-114.12588656',
     ],
     'listings / first-nations' => [
         'method' => 'GET',
-        'path' => 'api/v7/listings/first-nations-listings?token=__TOKEN__&uid=__UID__',
+        'path' => 'v1/listings/first-nations-listings?token=__TOKEN__&uid=__UID__',
     ],
 ];
 

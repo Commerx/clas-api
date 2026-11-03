@@ -1,9 +1,9 @@
 <?php
 
-use App\Http\Controllers\Api\V7\ListingsController;
-use App\Http\Controllers\Api\V7\NotificationsController;
-use App\Http\Controllers\Api\V7\RequestsController;
-use App\Http\Controllers\Api\V7\SecurityController;
+use App\Http\Controllers\Api\V1\ListingsController;
+use App\Http\Controllers\Api\V1\NotificationsController;
+use App\Http\Controllers\Api\V1\RequestsController;
+use App\Http\Controllers\Api\V1\SecurityController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -12,13 +12,16 @@ use Illuminate\Support\Facades\Route;
  * This runs on its own subdomain and is consumed by a new app build; the old
  * domain keeps serving the old Yii application unchanged for builds already
  * in the field. So these endpoints are free to be consistent rather than
- * bug-compatible — see App\Support\V7\ListingRow and App\Http\ApiResponse for
+ * bug-compatible — see App\Support\V1\ListingRow and App\Http\ApiResponse for
  * what changed and why.
  *
- * Paths are kept identical to the old ones so the app's only change is the
- * base URL. Methods are now meaningful: a GET endpoint is a GET.
+ * The version restarts at v1: this is a different API from the old /api/v7,
+ * not a successor to it, and sharing that number would make a logged
+ * response impossible to attribute. There is no /api segment either, since
+ * the subdomain already says so. Methods are now meaningful: a GET
+ * endpoint is a GET.
  */
-Route::prefix('v7')->group(function () {
+Route::prefix('v1')->group(function () {
     Route::post('security/login', [SecurityController::class, 'login']);
 
     Route::middleware('auth.token')->group(function () {

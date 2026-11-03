@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Support\V7;
+namespace App\Support\V1;
 
 /**
  * Shapes a `requests` row for the API.

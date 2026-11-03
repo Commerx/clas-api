@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * The existing `notification_categories` table.
  *
- * v7 returned these through Yii ActiveRecord, which casts integer columns
+ * The old API returned these through Yii ActiveRecord, which casts integer columns
  * from the schema, so `id` and `parent_id` arrive as integers. The sibling
  * notifications/list endpoint uses a raw query and returns everything as
  * strings — see NotificationsController.

@@ -20,7 +20,7 @@ class OpenApi
             'openapi' => '3.1.0',
             'info' => [
                 'title' => 'CLAS API',
-                'version' => '7.0.0',
+                'version' => '1.0.0',
                 'description' => self::overview(),
             ],
             'servers' => [
@@ -54,6 +54,14 @@ class OpenApi
         return <<<'MD'
 Rebuilt CLAS API. Runs on its own host; the previous Yii application continues
 to serve app builds already in the field from the original domain.
+
+### Base path
+
+Every endpoint sits under `/v1/`, with no `/api` segment — the host already
+says that. The version restarts at 1 because this is a different API from the
+old `/api/v7`, not a successor to it: the two share a database but not an
+envelope, a set of status codes or a set of field types, and reusing the number
+would make a logged response impossible to attribute to one of them.
 
 ### Conventions
 
@@ -327,7 +335,7 @@ MD;
         ]);
 
         return [
-            '/api/v7/security/login' => [
+            '/v1/security/login' => [
                 'post' => [
                     'tags' => ['Security'],
                     'summary' => 'Log in and obtain a token',
@@ -370,7 +378,7 @@ MD;
                 ],
             ],
 
-            '/api/v7/listings/all' => ['get' => [
+            '/v1/listings/all' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Public listings',
                 'parameters' => self::listingParams(),
@@ -378,7 +386,7 @@ MD;
                     self::itemsOf('#/components/schemas/ListingSummary')) + $authFailures,
             ]],
 
-            '/api/v7/listings/geofence-listings' => ['get' => [
+            '/v1/listings/geofence-listings' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Listings with geofences, including boundary geometry',
                 'description' => 'The busiest endpoint. The previous version returned a '
@@ -389,14 +397,14 @@ MD;
                     self::itemsOf('#/components/schemas/ListingWithGeometry')) + $authFailures,
             ]],
 
-            '/api/v7/listings/first-nations-listings' => ['get' => [
+            '/v1/listings/first-nations-listings' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'First Nations listings that have a KML boundary',
                 'responses' => self::ok('Identifiers and KML references.', self::itemsOf('#/components/schemas/ListingSummary'))
                     + $authFailures,
             ]],
 
-            '/api/v7/listings/search' => ['get' => [
+            '/v1/listings/search' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Search listings by keyword or feature',
                 'parameters' => array_merge([
@@ -407,7 +415,7 @@ MD;
                     self::itemsOf('#/components/schemas/ListingSummary')) + $authFailures,
             ]],
 
-            '/api/v7/listings/detail' => ['get' => [
+            '/v1/listings/detail' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'One listing in full',
                 'parameters' => [self::param('id', 'integer', 'Land id.', true)],
@@ -417,7 +425,7 @@ MD;
                 ]) + $withNotFound,
             ]],
 
-            '/api/v7/listings/availability' => ['get' => [
+            '/v1/listings/availability' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Blocked days and how full each day is',
                 'description' => 'Percentages are bucketed to 25, 50, 75 or 100 because '
@@ -438,7 +446,7 @@ MD;
                 ]) + $withNotFound,
             ]],
 
-            '/api/v7/listings/get-blocked-days' => ['get' => [
+            '/v1/listings/get-blocked-days' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Every blocked day for a listing',
                 'parameters' => [self::param('land_id', 'integer', 'Land id.', true)],
@@ -458,7 +466,7 @@ MD;
                 ]) + $withNotFound,
             ]],
 
-            '/api/v7/listings/sun-details' => ['get' => [
+            '/v1/listings/sun-details' => ['get' => [
                 'tags' => ['Listings'],
                 'summary' => 'Sunrise and sunset for a location',
                 'description' => 'Computed locally; no external service is called. Times '
@@ -481,7 +489,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/listings/subscribe' => ['post' => [
+            '/v1/listings/subscribe' => ['post' => [
                 'tags' => ['Listings'],
                 'summary' => 'Subscribe to a listing\'s notifications',
                 'requestBody' => self::formBody(['id' => 'Land id.'], ['id']),
@@ -496,7 +504,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/listings/unsubscribe' => ['post' => [
+            '/v1/listings/unsubscribe' => ['post' => [
                 'tags' => ['Listings'],
                 'summary' => 'Stop receiving a listing\'s notifications',
                 'requestBody' => self::formBody(['id' => 'Land id.'], ['id']),
@@ -511,7 +519,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/listings/block-day' => ['post' => [
+            '/v1/listings/block-day' => ['post' => [
                 'tags' => ['Listings'],
                 'summary' => 'Block one day on a listing you own',
                 'description' => 'Owner only. `open_property_limits` is stored '
@@ -549,7 +557,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/listings/unblock-day' => ['post' => [
+            '/v1/listings/unblock-day' => ['post' => [
                 'tags' => ['Listings'],
                 'summary' => 'Unblock a day on a listing you own',
                 'requestBody' => self::formBody([
@@ -567,7 +575,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/listings/block-multiple-days' => ['post' => [
+            '/v1/listings/block-multiple-days' => ['post' => [
                 'tags' => ['Listings'],
                 'summary' => 'Block several days at once',
                 'description' => 'Days already blocked are reported in `skipped` '
@@ -593,7 +601,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/unread-counts' => ['get' => [
+            '/v1/requests/unread-counts' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'How many requests await attention, on each side',
                 'description' => 'A user is the requester on their own bookings and the '
@@ -608,7 +616,7 @@ MD;
                 ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
             ]],
 
-            '/api/v7/requests/list' => ['get' => [
+            '/v1/requests/list' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'Every request the caller has made',
                 'parameters' => [
@@ -620,7 +628,7 @@ MD;
                     + self::failures([401 => 'Missing, unknown or mismatched token.']),
             ]],
 
-            '/api/v7/requests/mine' => ['get' => [
+            '/v1/requests/mine' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'The caller\'s requests, excluding expired ones',
                 'parameters' => [
@@ -632,7 +640,7 @@ MD;
                     + self::failures([401 => 'Missing, unknown or mismatched token.']),
             ]],
 
-            '/api/v7/requests/bookings' => ['get' => [
+            '/v1/requests/bookings' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'Requests against listings the caller owns or manages',
                 'description' => 'Includes listings taken down, since an owner still '
@@ -647,7 +655,7 @@ MD;
                     + self::failures([401 => 'Missing, unknown or mismatched token.']),
             ]],
 
-            '/api/v7/requests/listing-bookings' => ['get' => [
+            '/v1/requests/listing-bookings' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'Requests against one listing the caller owns or manages',
                 'description' => 'Answers 404 rather than 403 when the caller has no '
@@ -666,7 +674,7 @@ MD;
                     ]),
             ]],
 
-            '/api/v7/requests/detail' => ['get' => [
+            '/v1/requests/detail' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'One request in full',
                 'description' => 'Visible to the requester, and to anyone who owns or '
@@ -685,7 +693,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/upcoming' => ['get' => [
+            '/v1/requests/upcoming' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'Live bookings, plus nearby and popular listings',
                 'description' => 'Three lists in one response, for the screen the app '
@@ -710,7 +718,7 @@ MD;
                 ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
             ]],
 
-            '/api/v7/requests/today-bookings' => ['get' => [
+            '/v1/requests/today-bookings' => ['get' => [
                 'tags' => ['Requests'],
                 'summary' => 'Whether the caller has a booking on one listing today',
                 'description' => 'Called at the gate. Also returns the push token stored '
@@ -740,7 +748,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/submit' => ['post' => [
+            '/v1/requests/submit' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Request access to a listing',
                 'description' => 'Creates one request per day between start and end '
@@ -789,7 +797,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/accept' => ['post' => [
+            '/v1/requests/accept' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Accept a request',
                 'description' => 'Owner, or a manager whose invitation was accepted. Records the decision and marks it unread for the requester and read for the owner.',
@@ -810,7 +818,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/decline' => ['post' => [
+            '/v1/requests/decline' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Decline a request',
                 'description' => 'Owner, or a manager whose invitation was accepted.',
@@ -831,7 +839,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/cancel' => ['post' => [
+            '/v1/requests/cancel' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Cancel your own request',
                 'description' => 'The requester only, and only while the request is Pending or Accepted.',
@@ -852,7 +860,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/checkin' => ['post' => [
+            '/v1/requests/checkin' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Check in to an accepted booking',
                 'description' => 'The requester only. There is no date restriction: the old date check was commented out and that behaviour is preserved.',
@@ -874,7 +882,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/checkout' => ['post' => [
+            '/v1/requests/checkout' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Check out of a booking',
                 'description' => 'The requester only, from a Checked In booking. suspicious_activity and harvest_animal are the visitor own report at check-out, not anything held about them.',
@@ -898,7 +906,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/read' => ['post' => [
+            '/v1/requests/read' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Mark a request read',
                 'description' => 'Send is_owner=1 to mark the owner side, which needs owner or manager access; otherwise the requester marks their own side.',
@@ -919,7 +927,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/requests/delete-request' => ['post' => [
+            '/v1/requests/delete-request' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Delete your own request',
                 'description' => 'The requester only. The row is removed.',
@@ -939,7 +947,7 @@ MD;
                 ]),
             ]],
 
-            '/api/v7/notifications/list' => ['get' => [
+            '/v1/notifications/list' => ['get' => [
                 'tags' => ['Notifications'],
                 'summary' => 'Notifications for the signed-in user',
                 'parameters' => [
@@ -965,7 +973,7 @@ MD;
                 ]) + $authFailures,
             ]],
 
-            '/api/v7/notifications/categories' => ['get' => [
+            '/v1/notifications/categories' => ['get' => [
                 'tags' => ['Notifications'],
                 'summary' => 'Notification categories',
                 'responses' => self::ok('Active categories.', [

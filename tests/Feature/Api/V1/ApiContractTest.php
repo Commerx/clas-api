@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -42,7 +42,7 @@ class ApiContractTest extends TestCase
 
         if ($this->user === null) {
             $this->markTestSkipped(
-                'Fixture account missing; see tests/Fixtures/v7/README.md.'
+                'Fixture account missing; see tests/Fixtures/v1/README.md.'
             );
         }
     }
@@ -77,7 +77,7 @@ class ApiContractTest extends TestCase
     #[DataProvider('authenticatedEndpoints')]
     public function test_endpoint_rejects_a_missing_token(string $path, array $params): void
     {
-        $this->getJson('/api/v7/'.$path.'?'.http_build_query($params))
+        $this->getJson('/v1/'.$path.'?'.http_build_query($params))
             ->assertStatus(401)
             ->assertJsonPath('success', false)
             ->assertJsonPath('data', null);
@@ -86,7 +86,7 @@ class ApiContractTest extends TestCase
     #[DataProvider('authenticatedEndpoints')]
     public function test_endpoint_rejects_an_unknown_token(string $path, array $params): void
     {
-        $this->getJson('/api/v7/'.$path.'?'.http_build_query(
+        $this->getJson('/v1/'.$path.'?'.http_build_query(
             $params + ['token' => str_repeat('d', 32)]
         ))->assertStatus(401);
     }
@@ -100,7 +100,7 @@ class ApiContractTest extends TestCase
     public function test_the_token_is_accepted_as_a_bearer_header(): void
     {
         $this->withHeader('Authorization', 'Bearer '.$this->user->auth_key)
-            ->getJson('/api/v7/listings/all?limit=1')
+            ->getJson('/v1/listings/all?limit=1')
             ->assertOk()
             ->assertJsonPath('success', true);
     }
@@ -186,7 +186,7 @@ class ApiContractTest extends TestCase
 
     public function test_login_rejects_a_bad_password_with_401(): void
     {
-        $this->postJson('/api/v7/security/login', [
+        $this->postJson('/v1/security/login', [
             'login' => 'contract_fixture',
             'password' => 'definitely-wrong',
             'os' => 'android',
@@ -195,14 +195,14 @@ class ApiContractTest extends TestCase
 
     public function test_login_reports_missing_fields_as_422(): void
     {
-        $this->postJson('/api/v7/security/login', ['login' => 'contract_fixture'])
+        $this->postJson('/v1/security/login', ['login' => 'contract_fixture'])
             ->assertStatus(422)
             ->assertJsonStructure(['errors' => ['password', 'os']]);
     }
 
     public function test_login_returns_a_usable_token_and_native_types(): void
     {
-        $data = $this->postJson('/api/v7/security/login', [
+        $data = $this->postJson('/v1/security/login', [
             'login' => 'contract_fixture',
             'password' => 'ContractTest123!',
             'os' => 'android',
@@ -215,13 +215,13 @@ class ApiContractTest extends TestCase
             'The old API returned this as a string.');
 
         $this->withHeader('Authorization', 'Bearer '.$data['token'])
-            ->getJson('/api/v7/listings/all?limit=1')
+            ->getJson('/v1/listings/all?limit=1')
             ->assertOk();
     }
 
     private function url(string $path, array $params): string
     {
-        return '/api/v7/'.$path.'?'.http_build_query(
+        return '/v1/'.$path.'?'.http_build_query(
             $params + ['token' => $this->user->auth_key]
         );
     }

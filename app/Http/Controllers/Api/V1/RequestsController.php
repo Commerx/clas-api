@@ -1,15 +1,15 @@
 <?php
 
-namespace App\Http\Controllers\Api\V7;
+namespace App\Http\Controllers\Api\V1;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Models\KeyFeature;
 use App\Services\BookingSubmission;
 use App\Services\RequestNotifier;
-use App\Support\V7\ListingAccess;
-use App\Support\V7\ListingRow;
-use App\Support\V7\RequestRow;
+use App\Support\V1\ListingAccess;
+use App\Support\V1\ListingRow;
+use App\Support\V1\RequestRow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;

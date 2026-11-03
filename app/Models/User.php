@@ -84,7 +84,7 @@ class User extends Model
     }
 
     /**
-     * Listing access subscription. Unlike the three below, v7 does not filter
+     * Listing access subscription. Unlike the three below, the old API does not filter
      * this one on expiration_date — only on status — so neither do we.
      */
     public function lastListingSubscription(): ?object

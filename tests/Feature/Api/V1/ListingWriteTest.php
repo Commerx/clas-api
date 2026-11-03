@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -41,7 +41,7 @@ class ListingWriteTest extends TestCase
         }
 
         if ($this->user === null) {
-            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v1/README.md.');
         }
 
         $this->ownedLandId = DB::table('land')
@@ -50,7 +50,7 @@ class ListingWriteTest extends TestCase
             ->value('land_id');
 
         if ($this->ownedLandId === null) {
-            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v1/README.md.');
         }
 
         $this->otherLandId = DB::table('land')
@@ -85,7 +85,7 @@ class ListingWriteTest extends TestCase
 
     public function test_subscribe_then_unsubscribe_round_trips(): void
     {
-        $this->post('/api/v7/listings/subscribe', $this->body(['id' => $this->otherLandId]))
+        $this->post('/v1/listings/subscribe', $this->body(['id' => $this->otherLandId]))
             ->assertOk()
             ->assertJsonPath('data.item.is_subscribed', true);
 
@@ -94,7 +94,7 @@ class ListingWriteTest extends TestCase
             'user_id' => $this->user->id,
         ]);
 
-        $this->post('/api/v7/listings/unsubscribe', $this->body(['id' => $this->otherLandId]))
+        $this->post('/v1/listings/unsubscribe', $this->body(['id' => $this->otherLandId]))
             ->assertOk()
             ->assertJsonPath('data.item.is_subscribed', false);
 
@@ -106,10 +106,10 @@ class ListingWriteTest extends TestCase
 
     public function test_subscribing_twice_conflicts_rather_than_duplicating(): void
     {
-        $this->post('/api/v7/listings/subscribe', $this->body(['id' => $this->otherLandId]))
+        $this->post('/v1/listings/subscribe', $this->body(['id' => $this->otherLandId]))
             ->assertOk();
 
-        $this->post('/api/v7/listings/subscribe', $this->body(['id' => $this->otherLandId]))
+        $this->post('/v1/listings/subscribe', $this->body(['id' => $this->otherLandId]))
             ->assertStatus(409);
 
         $this->assertSame(1, DB::table('land_notification_subscriptions')
@@ -120,13 +120,13 @@ class ListingWriteTest extends TestCase
 
     public function test_unsubscribing_when_not_subscribed_conflicts(): void
     {
-        $this->post('/api/v7/listings/unsubscribe', $this->body(['id' => $this->otherLandId]))
+        $this->post('/v1/listings/unsubscribe', $this->body(['id' => $this->otherLandId]))
             ->assertStatus(409);
     }
 
     public function test_blocking_a_listing_you_do_not_own_is_forbidden(): void
     {
-        $this->post('/api/v7/listings/block-day', $this->body([
+        $this->post('/v1/listings/block-day', $this->body([
             'land_id' => $this->otherLandId,
             'date' => '2030-03-01',
         ]))->assertStatus(403);
@@ -139,7 +139,7 @@ class ListingWriteTest extends TestCase
 
     public function test_block_and_unblock_a_day(): void
     {
-        $this->post('/api/v7/listings/block-day', $this->body([
+        $this->post('/v1/listings/block-day', $this->body([
             'land_id' => $this->ownedLandId,
             'date' => '2030-03-02',
         ]))->assertStatus(201)->assertJsonPath('data.blocked_day.blocked_date', '2030-03-02');
@@ -149,7 +149,7 @@ class ListingWriteTest extends TestCase
             'blocked_date' => '2030-03-02',
         ]);
 
-        $this->post('/api/v7/listings/unblock-day', $this->body([
+        $this->post('/v1/listings/unblock-day', $this->body([
             'land_id' => $this->ownedLandId,
             'date' => '2030-03-02',
         ]))->assertOk()->assertJsonPath('data.unblocked', 1);
@@ -164,8 +164,8 @@ class ListingWriteTest extends TestCase
     {
         $body = $this->body(['land_id' => $this->ownedLandId, 'date' => '2030-03-03']);
 
-        $this->post('/api/v7/listings/block-day', $body)->assertStatus(201);
-        $this->post('/api/v7/listings/block-day', $body)->assertStatus(409);
+        $this->post('/v1/listings/block-day', $body)->assertStatus(201);
+        $this->post('/v1/listings/block-day', $body)->assertStatus(409);
 
         $this->assertSame(1, DB::table('land_blocked_days')
             ->where('land_id', $this->ownedLandId)
@@ -175,7 +175,7 @@ class ListingWriteTest extends TestCase
 
     public function test_a_bad_date_format_is_rejected_before_any_write(): void
     {
-        $this->post('/api/v7/listings/block-day', $this->body([
+        $this->post('/v1/listings/block-day', $this->body([
             'land_id' => $this->ownedLandId,
             'date' => '02-03-2030',
         ]))->assertStatus(422)->assertJsonStructure(['errors' => ['date']]);
@@ -188,7 +188,7 @@ class ListingWriteTest extends TestCase
 
     public function test_blocking_several_days_skips_the_ones_already_blocked(): void
     {
-        $this->post('/api/v7/listings/block-multiple-days', $this->body([
+        $this->post('/v1/listings/block-multiple-days', $this->body([
             'land_id' => $this->ownedLandId,
             'dates' => ['2030-04-01', '2030-04-02', '2030-04-01'],
         ]))
@@ -197,7 +197,7 @@ class ListingWriteTest extends TestCase
             ->assertJsonPath('data.skipped', []);
 
         // Retrying a partially applied batch should converge, not fail.
-        $this->post('/api/v7/listings/block-multiple-days', $this->body([
+        $this->post('/v1/listings/block-multiple-days', $this->body([
             'land_id' => $this->ownedLandId,
             'dates' => ['2030-04-02', '2030-04-03'],
         ]))
@@ -213,7 +213,7 @@ class ListingWriteTest extends TestCase
 
     public function test_an_empty_date_list_is_rejected(): void
     {
-        $this->post('/api/v7/listings/block-multiple-days', $this->body([
+        $this->post('/v1/listings/block-multiple-days', $this->body([
             'land_id' => $this->ownedLandId,
             'dates' => [],
         ]))->assertStatus(422)->assertJsonStructure(['errors' => ['dates']]);
@@ -226,7 +226,7 @@ class ListingWriteTest extends TestCase
      */
     public function test_the_row_written_matches_what_the_old_api_writes(): void
     {
-        $this->post('/api/v7/listings/block-day', $this->body([
+        $this->post('/v1/listings/block-day', $this->body([
             'land_id' => $this->ownedLandId,
             'date' => '2030-05-01',
             // Sent deliberately: the fixture listing is not an open property,

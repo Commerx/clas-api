@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -58,7 +58,7 @@ class NoSecretsInResponsesTest extends TestCase
         }
 
         if ($this->user === null) {
-            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v1/README.md.');
         }
     }
 
@@ -137,7 +137,7 @@ class NoSecretsInResponsesTest extends TestCase
 
     private function url(string $path, array $params): string
     {
-        return '/api/v7/'.$path.'?'.http_build_query(
+        return '/v1/'.$path.'?'.http_build_query(
             $params + ['token' => $this->user->auth_key]
         );
     }

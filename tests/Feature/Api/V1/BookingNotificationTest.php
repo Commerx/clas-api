@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use App\Mail\RequestCancelled;
 use App\Mail\RequestDecided;
@@ -43,7 +43,7 @@ class BookingNotificationTest extends TestCase
         }
 
         if ($user === null) {
-            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v1/README.md.');
         }
 
         $landId = DB::table('land')
@@ -52,7 +52,7 @@ class BookingNotificationTest extends TestCase
             ->value('land_id');
 
         if ($landId === null) {
-            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v1/README.md.');
         }
 
         $this->user = $user;
@@ -85,7 +85,7 @@ class BookingNotificationTest extends TestCase
 
     public function test_accepting_notifies_the_requester(): void
     {
-        $this->post('/api/v7/requests/accept', $this->body())->assertOk();
+        $this->post('/v1/requests/accept', $this->body())->assertOk();
 
         Mail::assertSent(RequestDecided::class, function ($mail) {
             return $mail->hasTo($this->user->email)
@@ -95,7 +95,7 @@ class BookingNotificationTest extends TestCase
 
     public function test_declining_notifies_the_requester(): void
     {
-        $this->post('/api/v7/requests/decline', $this->body())->assertOk();
+        $this->post('/v1/requests/decline', $this->body())->assertOk();
 
         Mail::assertSent(RequestDecided::class,
             fn ($mail) => $mail->decision === 'declined');
@@ -103,7 +103,7 @@ class BookingNotificationTest extends TestCase
 
     public function test_cancelling_notifies_the_owner(): void
     {
-        $this->post('/api/v7/requests/cancel', $this->body())->assertOk();
+        $this->post('/v1/requests/cancel', $this->body())->assertOk();
 
         Mail::assertSent(RequestCancelled::class,
             fn ($mail) => $mail->hasTo($this->user->email));
@@ -113,7 +113,7 @@ class BookingNotificationTest extends TestCase
     {
         DB::table('requests')->where('request_id', $this->requestId)->update(['status' => 'Accepted']);
 
-        $this->post('/api/v7/requests/checkin', $this->body())->assertOk();
+        $this->post('/v1/requests/checkin', $this->body())->assertOk();
 
         Mail::assertSent(RequestMovement::class, fn ($mail) => $mail->movement === 'in');
     }
@@ -122,7 +122,7 @@ class BookingNotificationTest extends TestCase
     {
         DB::table('requests')->where('request_id', $this->requestId)->update(['status' => 'Checked In']);
 
-        $this->post('/api/v7/requests/checkout', $this->body([
+        $this->post('/v1/requests/checkout', $this->body([
             'harvest_animal' => 'Yes',
             'suspicious_activity' => 'Gate left open',
             'category' => 'Big Game',
@@ -138,14 +138,14 @@ class BookingNotificationTest extends TestCase
     public function test_a_rejected_transition_sends_nothing(): void
     {
         // Checking in before acceptance is refused.
-        $this->post('/api/v7/requests/checkin', $this->body())->assertStatus(409);
+        $this->post('/v1/requests/checkin', $this->body())->assertStatus(409);
 
         Mail::assertNothingSent();
     }
 
     public function test_marking_read_sends_nothing(): void
     {
-        $this->post('/api/v7/requests/read', $this->body())->assertOk();
+        $this->post('/v1/requests/read', $this->body())->assertOk();
 
         Mail::assertNothingSent();
     }
@@ -159,7 +159,7 @@ class BookingNotificationTest extends TestCase
         config(['notifications.movement_bcc' => ['ops@example.invalid']]);
 
         DB::table('requests')->where('request_id', $this->requestId)->update(['status' => 'Accepted']);
-        $this->post('/api/v7/requests/checkin', $this->body())->assertOk();
+        $this->post('/v1/requests/checkin', $this->body())->assertOk();
 
         Mail::assertSent(RequestMovement::class,
             fn ($mail) => $mail->hasBcc('ops@example.invalid'));

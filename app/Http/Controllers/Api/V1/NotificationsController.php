@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\V7;
+namespace App\Http\Controllers\Api\V1;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
@@ -12,10 +12,10 @@ use Illuminate\Support\Facades\DB;
 /**
  * Rebuild of modules/api/controllers/v7/NotificationsController.php.
  *
- * Authentication is handled by the auth.v7 middleware rather than repeated in
+ * Authentication is handled by the auth.token middleware rather than repeated in
  * each action, but the responses are unchanged.
  *
- * These two endpoints differ in a way that matters. v7 served `categories`
+ * These two endpoints differ in a way that matters. The old API served `categories`
  * through Yii ActiveRecord, which casts integer columns from the schema, so
  * `id` and `parent_id` come back as integers. It served `list` through a raw
  * yii\db\Query, where PDO hands back every column as a string — so `id` is
@@ -52,7 +52,7 @@ class NotificationsController extends Controller
             ->where('notifications_users_mapping.user_id', $user->id)
             ->orderByDesc('notifications.created');
 
-        // v7 applies offset and limit only when truthy, so start=0 and an
+        // The old API applies offset and limit only when truthy, so start=0 and an
         // absent limit both mean "no clause" rather than LIMIT 0.
         if ($start) {
             $query->offset($start);

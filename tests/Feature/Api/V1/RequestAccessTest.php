@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -39,7 +39,7 @@ class RequestAccessTest extends TestCase
         }
 
         if ($this->outsider === null) {
-            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v1/README.md.');
         }
 
         // A request the fixture account neither made nor has any listing claim to.
@@ -136,7 +136,7 @@ class RequestAccessTest extends TestCase
 
     private function url(string $path, array $params): string
     {
-        return '/api/v7/requests/'.$path.'?'.http_build_query(
+        return '/v1/requests/'.$path.'?'.http_build_query(
             $params + ['token' => $this->outsider->auth_key]
         );
     }

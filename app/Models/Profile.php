@@ -31,7 +31,7 @@ class Profile extends Model
     }
 
     /**
-     * The v7 login response reports whether the address block has anything
+     * The old API's login response reports whether the address block has anything
      * in it. It counts street, city, province, country-or-postcode and phone,
      * and calls it present only when more than one is filled in.
      */
@@ -57,7 +57,7 @@ class Profile extends Model
     }
 
     /**
-     * Same idea for the vehicle block, but v7 treats a single filled field as
+     * Same idea for the vehicle block, but the old API treats a single filled field as
      * present here, unlike the address block above. Kept as-is for parity.
      */
     public function vehiclePartsCount(): int

@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\V7;
+namespace Tests\Feature\Api\V1;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -44,13 +44,13 @@ class BookingSubmissionTest extends TestCase
         }
 
         if ($user === null) {
-            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture account missing; see tests/Fixtures/v1/README.md.');
         }
 
         $landId = DB::table('land')->where('land_name', 'Contract Fixture Land')->value('land_id');
 
         if ($landId === null) {
-            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v7/README.md.');
+            $this->markTestSkipped('Fixture listing missing; see tests/Fixtures/v1/README.md.');
         }
 
         $this->user = $user;
@@ -98,7 +98,7 @@ class BookingSubmissionTest extends TestCase
 
     private function submit(array $fields): TestResponse
     {
-        return $this->postJson('/api/v7/requests/submit', $fields + [
+        return $this->postJson('/v1/requests/submit', $fields + [
             'token' => $this->user->auth_key,
             'land_id' => $this->landId,
             'reason' => 'Hunting',
@@ -243,7 +243,7 @@ class BookingSubmissionTest extends TestCase
 
     public function test_an_unknown_listing_is_404(): void
     {
-        $this->postJson('/api/v7/requests/submit', [
+        $this->postJson('/v1/requests/submit', [
             'token' => $this->user->auth_key, 'land_id' => 99999999,
             'reason' => 'Hunting', 'start' => '2031-10-01', 'end' => '2031-10-01',
         ])->assertStatus(404);
@@ -251,7 +251,7 @@ class BookingSubmissionTest extends TestCase
 
     public function test_submitting_requires_a_token(): void
     {
-        $this->postJson('/api/v7/requests/submit', [
+        $this->postJson('/v1/requests/submit', [
             'land_id' => $this->landId, 'reason' => 'Hunting',
             'start' => '2031-10-01', 'end' => '2031-10-01',
         ])->assertStatus(401);

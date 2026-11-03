@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Http\Docs\OpenApi;
+use App\Support\ApiPath;
 use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
@@ -61,15 +62,18 @@ class ResponseHygieneTest extends TestCase
     public function test_every_api_route_is_authenticated_except_login(): void
     {
         $unguarded = [];
+        $checked = 0;
 
         foreach (app('router')->getRoutes() as $route) {
             $uri = $route->uri();
 
-            if (! str_starts_with($uri, 'api/')) {
+            if (! ApiPath::isApiUri($uri)) {
                 continue;
             }
 
-            if ($uri === 'api/v7/security/login') {
+            $checked++;
+
+            if ($uri === 'v1/security/login') {
                 continue; // issues the token the others require
             }
 
@@ -77,6 +81,10 @@ class ResponseHygieneTest extends TestCase
                 $unguarded[] = implode('|', $route->methods()).' '.$uri;
             }
         }
+
+        $this->assertGreaterThan(0, $checked,
+            'This guard matched no routes at all, so it proved nothing. '
+            .'Has the route prefix changed without ApiPath following it?');
 
         $this->assertSame([], $unguarded, implode("\n", array_merge(
             ['These API routes are not behind auth.token:'],
@@ -93,23 +101,73 @@ class ResponseHygieneTest extends TestCase
     {
         $documented = array_keys(OpenApi::spec()['paths']);
         $missing = [];
+        $checked = 0;
 
         foreach (app('router')->getRoutes() as $route) {
             $uri = '/'.$route->uri();
 
-            if (! str_starts_with($uri, '/api/')) {
+            if (! ApiPath::isApiUri($uri)) {
                 continue;
             }
+
+            $checked++;
 
             if (! in_array($uri, $documented, true)) {
                 $missing[] = $uri;
             }
         }
 
+        $this->assertGreaterThan(0, $checked,
+            'This guard matched no routes at all, so it proved nothing. '
+            .'Has the route prefix changed without ApiPath following it?');
+
         $this->assertSame([], array_values(array_unique($missing)), implode("\n", array_merge(
             ['These routes are not in app/Http/Docs/OpenApi.php:'],
             array_unique($missing),
         )));
+    }
+
+    /**
+     * A wrong path or method must answer in the envelope, not with HTML.
+     *
+     * This is decided by App\Support\ApiPath, which recognises
+     * an API request by its version segment. There is no /api prefix to match
+     * on any more, so a client that mistypes a path is exactly the caller most
+     * likely to be reading the body — and the one who would get a framework
+     * HTML error page if that check ever stopped matching.
+     */
+    public function test_an_unknown_endpoint_answers_in_the_envelope(): void
+    {
+        $this->getJson('/v1/listings/no-such-thing')
+            ->assertStatus(404)
+            ->assertJson(['success' => false, 'error' => 'No such endpoint.']);
+    }
+
+    public function test_an_unknown_endpoint_answers_in_the_envelope_without_a_json_header(): void
+    {
+        // Without Accept: application/json nothing but the path says this is
+        // an API call, which is the case the version-segment check exists for.
+        $response = $this->get('/v1/listings/no-such-thing');
+
+        $response->assertStatus(404);
+        $this->assertSame('application/json', $response->headers->get('content-type'));
+        $this->assertSame('No such endpoint.', $response->json('error'));
+    }
+
+    public function test_a_wrong_method_answers_in_the_envelope(): void
+    {
+        // listings/all is a GET; the old API accepted anything.
+        $this->postJson('/v1/listings/all')
+            ->assertStatus(405)
+            ->assertJsonPath('error', 'That method is not allowed on this endpoint.');
+    }
+
+    /** A non-API path keeps the framework's own handling. */
+    public function test_a_non_api_path_is_not_given_the_envelope(): void
+    {
+        $this->get('/no-such-page')
+            ->assertStatus(404)
+            ->assertDontSee('"success"', escape: false);
     }
 
     /** @return list<string> */

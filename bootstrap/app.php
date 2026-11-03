@@ -3,6 +3,7 @@
 use App\Http\ApiResponse;
 use App\Http\Middleware\AuthenticateToken;
 use App\Http\Middleware\DocsEnabled;
+use App\Support\ApiPath;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -17,7 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
             Route::middleware('web')->group(base_path('routes/docs.php'));
         },
         api: __DIR__.'/../routes/api.php',
-        apiPrefix: 'api',
+        apiPrefix: '',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
@@ -29,13 +30,13 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
+            fn (Request $request) => ApiPath::matches($request) || $request->expectsJson(),
         );
 
         // An unknown path or a wrong method should answer in the same shape
         // as everything else, rather than with a framework page.
         $exceptions->render(function (HttpExceptionInterface $e, Request $request) {
-            if (! $request->is('api/*')) {
+            if (! ApiPath::matches($request)) {
                 return null;
             }
 

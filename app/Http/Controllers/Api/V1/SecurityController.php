@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\V7;
+namespace App\Http\Controllers\Api\V1;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
@@ -15,11 +15,12 @@ use Illuminate\Support\Facades\DB;
  * Rebuild of modules/api/controllers/v7/SecurityController.php.
  *
  * Two shipped mobile apps call these endpoints and cannot be patched from the
- * server, so the response must match v7 field for field and type for type.
- * The captured v7 responses in tests/Fixtures/v7 are the specification; the
+ * server, so the response must match the old API field for field and type for
+ * type.
+ * The responses captured from it in tests/Fixtures/v1 are the specification; the
  * contract tests fail if this drifts from them.
  *
- * Note the deliberate inconsistency carried over from v7: `id` is an integer
+ * Note the deliberate inconsistency carried over from it: `id` is an integer
  * while `notifications_unread_count` is a string, because the old code passed
  * a PDO COUNT straight through. Making both integers would be tidier and would
  * break the apps.
@@ -73,7 +74,7 @@ class SecurityController extends Controller
     }
 
     /**
-     * v7 keeps one device token per user per OS: the old rows for that OS are
+     * The old API keeps one device token per user per OS: the old rows for that OS are
      * deleted and a new row inserted, rather than updated in place.
      */
     private function rememberDeviceToken(User $user, string $os, string $deviceToken): void
@@ -131,7 +132,7 @@ class SecurityController extends Controller
             $data['free_user'] = false;
         }
 
-        // v7 uses the plural key here but the singular one in the defaults
+        // The old API uses the plural key here but the singular one in the defaults
         // above, so both appear in the response for a subscribed user.
         if ($wmu = $user->wmuSubscription()) {
             $data['wmu_subscriptions'] = $this->subscriptionWindow($wmu);
