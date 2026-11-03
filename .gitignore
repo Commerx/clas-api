@@ -29,3 +29,6 @@ Thumbs.db
 # private keys
 *.pem
 *.key
+
+# Local assistant guidance, not part of the deliverable
+CLAUDE.md
