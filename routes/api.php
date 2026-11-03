@@ -43,6 +43,7 @@ Route::prefix('v7')->group(function () {
 
         // Booking lifecycle. Decisions are owner-or-manager; the rest are the
         // requester's own. Rows written match the old application exactly.
+        Route::post('requests/submit', [RequestsController::class, 'submit']);
         Route::post('requests/accept', [RequestsController::class, 'accept']);
         Route::post('requests/decline', [RequestsController::class, 'decline']);
         Route::post('requests/cancel', [RequestsController::class, 'cancel']);

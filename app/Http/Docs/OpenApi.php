@@ -685,6 +685,55 @@ MD;
                 ]),
             ]],
 
+            '/api/v7/requests/submit' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Request access to a listing',
+                'description' => 'Creates one request per day between start and end '
+                    .'inclusive. Each day is checked first, and the whole submission '
+                    .'is refused if any day cannot take it, so a stay is never '
+                    .'half-booked. Refusals are 409 and name the day and the reason: '
+                    .'the listing is closed that day, it is full, only so many units '
+                    .'remain for that activity, you already hold a booking there that '
+                    .'day, or you have reached the limit of two requests per day. '
+                    .'Guides listed on the listing are exempt from the last two; a '
+                    .'caller on the supersede list skips availability entirely.',
+                'requestBody' => self::formBody([
+                    'land_id' => 'Land id.',
+                    'reason' => 'Foot Access, Hunting, Fishing, OHV, Horse or SnowMobile.',
+                    'start' => 'First day, YYYY-MM-DD.',
+                    'end' => 'Last day, YYYY-MM-DD. Same as start for one day.',
+                    'people_count' => 'How many people, for a private listing.',
+                    'people_details' => 'Who is coming.',
+                    'units_count' => 'How many vehicles, for an open property.',
+                    'description' => 'Why access is wanted.',
+                    'ohv_details' => 'Vehicle details, open properties.',
+                    'visitors' => 'Visitor details, open properties.',
+                ], ['land_id', 'reason', 'start', 'end']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'The requests created, one per day.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'request_ids' => ['type' => 'array', 'items' => ['type' => 'integer']],
+                                        'status' => ['type' => 'string', 'examples' => ['Pending', 'Accepted']],
+                                        'days' => ['type' => 'integer'],
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing.',
+                    409 => 'One or more days cannot take the request.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
             '/api/v7/requests/accept' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Accept a request',

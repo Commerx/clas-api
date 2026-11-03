@@ -64,10 +64,9 @@ Wire RequestNotifier to send, and assert delivery with Mail::fake in tests — 3
 Configure SMTP for staging and verify a real send end to end — 2h
 ```
 
-### 2. Finish the Requests controller
+### 2. Finish the Requests controller — submit DONE
 
 ```
-Port requests/submit, including capacity and supersede rules — 10h
 Port requests/upcoming with the nearby-listings geofence query — 4h
 Port requests/today-bookings — 4h
 Contract tests and OpenAPI entries for the three — 3h
@@ -148,14 +147,14 @@ Decide and document the old API sunset date and the forced-update trigger — 2h
 | Group | Hours |
 |---|---|
 | 1. Mail infrastructure | 12 |
-| 2. Finish Requests | 21 |
+| 2. Finish Requests | 11 |
 | 3. User, settings, security | 38 |
 | 4. Notifications | 28 |
 | 5. Self-contained features | 28 |
 | 6. ManageListings | 66 |
 | 7. Payments | 60 |
 | Cross-cutting | 19 |
-| **Total** | **272** |
+| **Total** | **262** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest

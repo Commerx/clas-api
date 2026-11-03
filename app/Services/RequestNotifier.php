@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Mail\NewRequestForOwner;
 use App\Mail\RequestCancelled;
 use App\Mail\RequestDecided;
 use App\Mail\RequestMovement;
@@ -43,6 +44,44 @@ class RequestNotifier
             // Empty source means the owner entered this listing themselves,
             // which is what decides the scan-in wording.
             source: ($land->source ?? '') === '' ? null : $land->source,
+        ));
+    }
+
+    /**
+     * A new request has been made.
+     *
+     * Auto-approved requests tell the requester, since there is no decision
+     * for the owner to make. Everything else tells the owner — but only when
+     * the visit is within three days, as before: an owner is not chased about
+     * a booking two months out, and they would get one notice per day of a
+     * long stay otherwise.
+     */
+    public function submitted(object $request, object $land, string $dates, bool $autoApproved): void
+    {
+        if ($autoApproved) {
+            $this->decided($request, $land, 'Accepted');
+
+            return;
+        }
+
+        if ($this->daysUntil($request->request_date) >= 3) {
+            return;
+        }
+
+        $owner = $this->person((int) ($land->owner ?? 0));
+
+        if (! $this->canSendTo($owner, 'submitted', $request)) {
+            return;
+        }
+
+        $requester = $this->person((int) $request->requester_id);
+
+        $this->send($owner->email, new NewRequestForOwner(
+            request: $request,
+            ownerName: $owner->name ?? '',
+            requesterName: $requester->name ?? 'A visitor',
+            propertyName: $land->land_name ?? '',
+            requestDates: $dates,
         ));
     }
 
@@ -139,5 +178,15 @@ class RequestNotifier
     private function formatDate(?string $date): string
     {
         return $date ? date('M d, Y', strtotime($date)) : '';
+    }
+
+    /** Whole days between now and a visit date. */
+    private function daysUntil(?string $date): int
+    {
+        if (! $date) {
+            return PHP_INT_MAX;
+        }
+
+        return (new \DateTime)->diff(new \DateTime($date))->days;
     }
 }

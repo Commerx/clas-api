@@ -26,7 +26,7 @@ Route::get('/health', function () {
         // `land` is the table every listing endpoint reads. If this fails the
         // connection is up but pointed somewhere without the legacy schema.
         $checks['listings'] = DB::table('land')->count();
-    } catch (\Throwable $e) {
+    } catch (Throwable $e) {
         $ok = false;
         $checks['error'] = $e->getMessage();
     }

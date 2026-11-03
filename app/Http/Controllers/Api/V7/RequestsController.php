@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V7;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
+use App\Services\BookingSubmission;
 use App\Services\RequestNotifier;
 use App\Support\V7\ListingAccess;
 use App\Support\V7\RequestRow;
@@ -219,6 +220,83 @@ class RequestsController extends Controller
         }
 
         return ApiResponse::data(['item' => $item]);
+    }
+
+    /**
+     * Make an access request, one row per day of the stay.
+     *
+     * The availability and limit rules live in BookingSubmission, because they
+     * are the substance and are worth testing without a request in the way.
+     * A refusal is 409: the request is well formed, the days are not available.
+     */
+    public function submit(
+        Request $request,
+        BookingSubmission $submission,
+        RequestNotifier $notifier,
+    ): JsonResponse {
+        $validator = Validator::make($request->all(), [
+            'land_id' => ['required', 'integer'],
+            'reason' => ['required', 'string', 'max:255'],
+            'start' => ['required', 'date_format:Y-m-d'],
+            'end' => ['required', 'date_format:Y-m-d', 'after_or_equal:start'],
+            'people_count' => ['nullable', 'integer', 'min:1'],
+            'units_count' => ['nullable', 'integer', 'min:1'],
+            'description' => ['nullable', 'string'],
+            'people_details' => ['nullable', 'string'],
+            'ohv_details' => ['nullable', 'string'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $land = DB::table('land')->where('land_id', (int) $request->input('land_id'))->first();
+
+        if ($land === null || $land->active !== 'Y') {
+            return ApiResponse::notFound('No such listing.');
+        }
+
+        // The submission rules need the caller's guide details, which live on
+        // the profile rather than the user row.
+        $caller = DB::table('user')
+            ->leftJoin('profile', 'profile.user_id', '=', 'user.id')
+            ->where('user.id', $this->userId($request))
+            ->select(['user.id', 'user.email', 'profile.guide', 'profile.guide_number'])
+            ->first();
+
+        [$ids, $refusal] = $submission->submit($caller, $land, $request->all());
+
+        if ($refusal !== null) {
+            return ApiResponse::error($refusal, 409);
+        }
+
+        $created = DB::table('requests')->whereIn('request_id', $ids)->get();
+        $first = $created->first();
+
+        if ($first !== null) {
+            $notifier->submitted(
+                $first,
+                $land,
+                $this->describeDates($request->input('start'), $request->input('end')),
+                $first->status === 'Accepted',
+            );
+        }
+
+        return ApiResponse::data([
+            'request_ids' => $ids,
+            'status' => $first->status ?? 'Pending',
+            'days' => count($ids),
+        ], 201);
+    }
+
+    /** How the notification refers to the stay: one day, or a range. */
+    private function describeDates(string $start, string $end): string
+    {
+        $from = date('M d, Y', strtotime($start));
+
+        return $start === $end
+            ? sprintf('on "%s"', $from)
+            : sprintf('from "%s" to "%s"', $from, date('M d, Y', strtotime($end)));
     }
 
     /**
