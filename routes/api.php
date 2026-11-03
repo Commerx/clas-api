@@ -40,6 +40,8 @@ Route::prefix('v7')->group(function () {
         Route::get('requests/bookings', [RequestsController::class, 'bookings']);
         Route::get('requests/listing-bookings', [RequestsController::class, 'listingBookings']);
         Route::get('requests/detail', [RequestsController::class, 'detail']);
+        Route::get('requests/upcoming', [RequestsController::class, 'upcoming']);
+        Route::get('requests/today-bookings', [RequestsController::class, 'todayBookings']);
 
         // Booking lifecycle. Decisions are owner-or-manager; the rest are the
         // requester's own. Rows written match the old application exactly.

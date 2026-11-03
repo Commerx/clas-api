@@ -685,6 +685,61 @@ MD;
                 ]),
             ]],
 
+            '/api/v7/requests/upcoming' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'Live bookings, plus nearby and popular listings',
+                'description' => 'Three lists in one response, for the screen the app '
+                    .'opens on. `items` holds accepted or checked-in bookings '
+                    .'bookings from today onwards, and anything still checked in '
+                    .'whatever its date. `nearby` needs coordinates and is empty '
+                    .'without them; sending them also records the position on the '
+                    .'profile. `popular` is the most requested public listings.',
+                'parameters' => [
+                    self::param('user_lat', 'number', 'Caller latitude; required for nearby.'),
+                    self::param('user_lng', 'number', 'Caller longitude.'),
+                    self::param('device_token', 'string', 'Push token to store for this device.'),
+                    self::param('os', 'string', 'ios or android; required with device_token.'),
+                ],
+                'responses' => self::ok('Bookings and suggestions.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'items' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/RequestSummary']],
+                        'nearby' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/ListingWithGeometry']],
+                        'popular' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/ListingWithGeometry']],
+                    ],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/api/v7/requests/today-bookings' => ['get' => [
+                'tags' => ['Requests'],
+                'summary' => 'Whether the caller has a booking on one listing today',
+                'description' => 'Called at the gate. Also returns the push token stored '
+                    .'for this device, which is why `os` is a parameter.',
+                'parameters' => [
+                    self::param('land_id', 'integer', 'Land id.', true),
+                    self::param('os', 'string', 'ios or android, to look up the stored token.'),
+                ],
+                'responses' => self::ok('Bookings on that listing today.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'user_name' => ['type' => 'string', 'nullable' => true],
+                        'items' => ['type' => 'array', 'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'request_id' => ['type' => 'integer'],
+                                'status' => ['type' => 'string'],
+                            ],
+                        ]],
+                        'device_token' => ['type' => 'string'],
+                        'land_id' => ['type' => 'integer'],
+                        'listing_name' => ['type' => 'string', 'nullable' => true],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
             '/api/v7/requests/submit' => ['post' => [
                 'tags' => ['Requests'],
                 'summary' => 'Request access to a listing',

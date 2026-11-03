@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Api\V7;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
+use App\Models\KeyFeature;
 use App\Services\BookingSubmission;
 use App\Services\RequestNotifier;
 use App\Support\V7\ListingAccess;
+use App\Support\V7\ListingRow;
 use App\Support\V7\RequestRow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -57,6 +59,19 @@ class RequestsController extends Controller
         'requests.is_user_read', 'requests.is_owner_read',
         'requests.activity_type', 'requests.units_count',
         'requests.visitor_details', 'requests.ohv_details',
+    ];
+
+    /** How many nearby and popular listings the upcoming screen shows. */
+    private const SUGGESTION_LIMIT = 20;
+
+    /** Listing columns carried by the nearby and popular suggestions. */
+    private const SUGGESTION_COLUMNS = [
+        'land.land_id', 'land.land_name', 'land.land_description', 'land.address',
+        'land.source', 'land.allowed_activities', 'land.is_rid_land',
+        'land.is_first_nations', 'land.is_open_property', 'land.barcode',
+        'land.owner', 'land.coordinates', 'land.geofencing', 'land.area',
+        'land.points', 'land.key_features', 'land.features_list',
+        'land.fireban_status_id',
     ];
 
     private const REQUEST_COLUMNS = [
@@ -220,6 +235,198 @@ class RequestsController extends Controller
         }
 
         return ApiResponse::data(['item' => $item]);
+    }
+
+    /**
+     * What the caller has coming up, plus suggestions.
+     *
+     * Three lists in one response, because the app opens on this screen:
+     * their own live bookings, public listings near them, and the most
+     * requested listings overall.
+     *
+     * `nearby` needs coordinates and is empty without them. Sending them also
+     * records the caller's position on their profile, which is what the
+     * geofence features read.
+     */
+    public function upcoming(Request $request): JsonResponse
+    {
+        $userId = $this->userId($request);
+
+        $this->rememberPosition($request, $userId);
+        $this->rememberDeviceToken($request, $userId);
+
+        // Accepted or checked-in bookings from today onwards, and anything
+        // still checked in whatever its date — someone who never checked out
+        // is still on the land.
+        $items = $this->requestQuery()
+            ->where('requests.requester_id', $userId)
+            ->where(function ($q) {
+                $q->where(function ($inner) {
+                    $inner->whereIn('requests.status', ['Accepted', 'Checked In'])
+                        ->whereRaw('requests.request_date >= CURDATE()');
+                })->orWhere('requests.status', 'Checked In');
+            })
+            ->reorder('requests.request_date')
+            ->get();
+
+        return ApiResponse::data([
+            'items' => RequestRow::formatAll($items),
+            'nearby' => $this->nearbyListings($request),
+            'popular' => $this->popularListings(),
+        ]);
+    }
+
+    /**
+     * Whether the caller has a live booking on one listing today.
+     *
+     * The app calls this at the gate, so it also returns the stored push token
+     * for the device — which is why `os` is a parameter here.
+     */
+    public function todayBookings(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'land_id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $userId = $this->userId($request);
+        $landId = (int) $request->input('land_id');
+
+        $items = DB::table('requests')
+            ->select(['requests.request_id', 'requests.status'])
+            ->join('land', 'requests.land_id', '=', 'land.land_id')
+            ->where('requests.requester_id', $userId)
+            ->where('requests.land_id', $landId)
+            ->whereIn('requests.status', ['Pending', 'Accepted', 'Checked In'])
+            ->whereRaw('requests.request_date = CURDATE()')
+            ->get();
+
+        $os = strtolower((string) $request->input('os', ''));
+
+        return ApiResponse::data([
+            'user_name' => DB::table('profile')->where('user_id', $userId)->value('first_name'),
+            'items' => RequestRow::formatAll($items),
+            'device_token' => in_array($os, ['ios', 'android'], true)
+                ? (string) DB::table('device_tokens')
+                    ->where('user_id', $userId)
+                    ->where('os', $os)
+                    ->orderByDesc('device_token_id')
+                    ->value('device_token')
+                : '',
+            'land_id' => $landId,
+            'listing_name' => DB::table('land')->where('land_id', $landId)->value('land_name'),
+        ]);
+    }
+
+    /** Public listings nearest the caller, closest first. */
+    private function nearbyListings(Request $request): array
+    {
+        $lat = $this->coordinate($request->input('user_lat'), 90);
+        $lng = $this->coordinate($request->input('user_lng'), 180);
+
+        if ($lat === null || $lng === null) {
+            return [];
+        }
+
+        $query = $this->suggestionQuery()
+            ->selectRaw($this->distanceExpression($lat, $lng))
+            ->orderBy('distance');
+
+        return $this->asListings($query->limit(self::SUGGESTION_LIMIT)->get());
+    }
+
+    /** The most requested public listings. */
+    private function popularListings(): array
+    {
+        $query = $this->suggestionQuery()
+            ->join('requests', 'requests.land_id', '=', 'land.land_id')
+            ->selectRaw('COUNT(requests.request_id) AS requests')
+            ->orderByDesc('requests');
+
+        return $this->asListings($query->limit(self::SUGGESTION_LIMIT)->get());
+    }
+
+    private function suggestionQuery()
+    {
+        return DB::table('land')
+            ->select(array_merge(self::SUGGESTION_COLUMNS, [
+                DB::raw('GROUP_CONCAT(photos.photo_name) AS photos'),
+            ]))
+            ->leftJoin('photos', 'photos.land_id', '=', 'land.land_id')
+            ->where('land.active', 'Y')
+            ->where('land.visibility_status', 'public')
+            ->groupBy('land.land_id');
+    }
+
+    private function asListings($rows): array
+    {
+        $keyFeatures = KeyFeature::activeOrdered();
+
+        return $rows
+            ->map(fn ($row) => ListingRow::format((array) $row, $keyFeatures, withGeometry: true))
+            ->all();
+    }
+
+    /**
+     * Great-circle distance in kilometres.
+     *
+     * The coordinates are validated floats by the time they reach here, never
+     * caller text — this expression cannot be parameterised because the same
+     * value appears three times, and PDO will not reuse a named placeholder
+     * under native prepares.
+     */
+    private function distanceExpression(float $lat, float $lng): string
+    {
+        return sprintf(
+            '(6371 * acos(cos(radians(%1$F)) * cos(radians(land_lat))'
+            .' * cos(radians(land_lng) - radians(%2$F))'
+            .' + sin(radians(%1$F)) * sin(radians(land_lat)))) AS distance',
+            $lat,
+            $lng,
+        );
+    }
+
+    private function rememberPosition(Request $request, int $userId): void
+    {
+        $lat = $this->coordinate($request->input('user_lat'), 90);
+        $lng = $this->coordinate($request->input('user_lng'), 180);
+
+        if ($lat === null || $lng === null) {
+            return;
+        }
+
+        DB::table('profile')->where('user_id', $userId)
+            ->update(['user_lat' => $lat, 'user_lng' => $lng]);
+    }
+
+    /** One push token per user per OS: the old rows are replaced, not updated. */
+    private function rememberDeviceToken(Request $request, int $userId): void
+    {
+        $token = (string) $request->input('device_token', '');
+        $os = strtolower((string) $request->input('os', ''));
+
+        if ($token === '' || ! in_array($os, ['ios', 'android'], true)) {
+            return;
+        }
+
+        DB::table('device_tokens')->where('user_id', $userId)->where('os', $os)->delete();
+        DB::table('device_tokens')->insert([
+            'user_id' => $userId, 'os' => $os, 'device_token' => $token,
+        ]);
+    }
+
+    private function coordinate(mixed $value, float $max): ?float
+    {
+        if ($value === null || $value === '' || ! is_numeric($value)) {
+            return null;
+        }
+
+        $value = (float) $value;
+
+        return ($value < -$max || $value > $max) ? null : $value;
     }
 
     /**
