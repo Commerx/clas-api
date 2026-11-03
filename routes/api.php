@@ -4,6 +4,8 @@ use App\Http\Controllers\Api\V1\ListingsController;
 use App\Http\Controllers\Api\V1\NotificationsController;
 use App\Http\Controllers\Api\V1\RequestsController;
 use App\Http\Controllers\Api\V1\SecurityController;
+use App\Http\Controllers\Api\V1\UserController;
+use App\Http\Controllers\Api\V1\UserSettingsController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -22,7 +24,30 @@ use Illuminate\Support\Facades\Route;
  * endpoint is a GET.
  */
 Route::prefix('v1')->group(function () {
+    /*
+     * Open endpoints.
+     *
+     * Everything here is reachable without a token, so each one is listed
+     * deliberately and the hygiene test in tests/Feature/ResponseHygieneTest
+     * holds this list as the complete set — adding a route outside the
+     * guarded group below fails that test until it is named there too.
+     *
+     * The three that send email are rate limited per IP. The old API had no
+     * limit on any of them, and two would send a message to any address
+     * given, which makes them a way to have mail from this domain delivered
+     * to someone who did not ask for it.
+     */
     Route::post('security/login', [SecurityController::class, 'login']);
+    Route::get('security/version-check', [SecurityController::class, 'versionCheck']);
+
+    Route::middleware('throttle:6,1')->group(function () {
+        Route::post('security/forgot-password', [SecurityController::class, 'forgotPassword']);
+        Route::post('user/signup', [UserController::class, 'signup']);
+
+        // Both signed in and not: see App\Http\Middleware\IdentifyToken.
+        Route::post('user/send-confirmation-code', [UserController::class, 'sendConfirmationCode'])
+            ->middleware('auth.identify');
+    });
 
     Route::middleware('auth.token')->group(function () {
         Route::get('notifications/list', [NotificationsController::class, 'index']);
@@ -67,5 +92,26 @@ Route::prefix('v1')->group(function () {
         Route::post('listings/block-day', [ListingsController::class, 'blockDay']);
         Route::post('listings/unblock-day', [ListingsController::class, 'unblockDay']);
         Route::post('listings/block-multiple-days', [ListingsController::class, 'blockMultipleDays']);
+
+        Route::post('security/logout', [SecurityController::class, 'logout']);
+
+        /*
+         * The account.
+         *
+         * Every one of these acts on the caller the token identifies. The old
+         * API's three update actions took the account from a `uid` parameter
+         * and never checked the token against it — see
+         * App\Http\Controllers\Api\V1\UserController.
+         */
+        Route::get('user/get', [UserController::class, 'get']);
+        Route::post('user/update-address', [UserController::class, 'updateAddress']);
+        Route::post('user/update-vehicle-info', [UserController::class, 'updateVehicleInfo']);
+        Route::post('user/update-profile', [UserController::class, 'updateProfile']);
+        Route::post('user/account', [UserController::class, 'account']);
+        Route::post('user/deactivate', [UserController::class, 'deactivate']);
+        Route::post('user/report-issue', [UserController::class, 'reportIssue']);
+
+        Route::get('user-settings/get-notification-settings', [UserSettingsController::class, 'get']);
+        Route::post('user-settings/save-notification-settings', [UserSettingsController::class, 'save']);
     });
 });

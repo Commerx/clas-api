@@ -317,6 +317,87 @@ MD;
         return $out;
     }
 
+    /**
+     * The account block returned by login, signup and user/get.
+     *
+     * Only the fields a client is likely to branch on are named; the block
+     * also carries the subscription flags, which are described in the
+     * endpoint text rather than repeated for each one.
+     */
+    private static function account(bool $withProfile = false): array
+    {
+        $properties = [
+            'id' => ['type' => 'integer'],
+            'name' => ['type' => 'string', 'nullable' => true],
+            'username' => ['type' => 'string'],
+            'email' => ['type' => 'string', 'format' => 'email'],
+            'token' => ['type' => 'string', 'description' => 'Send as a bearer token.'],
+            'confirmed' => ['type' => 'boolean'],
+            'deactivation_date' => [
+                'description' => 'When an unconfirmed account stops working, or false once confirmed.',
+                'oneOf' => [['type' => 'string'], ['type' => 'boolean']],
+            ],
+            'send_notifications' => ['type' => 'boolean'],
+            'profile_info_exists' => ['type' => 'boolean'],
+            'vehicle_info_exists' => ['type' => 'boolean'],
+            'free_user' => ['type' => 'boolean'],
+            'subscriber' => ['type' => 'boolean'],
+            'land_owner' => ['type' => 'boolean'],
+            'listings_count' => ['type' => 'integer', 'description' => 'Present only when land_owner is true.'],
+            'notifications_unread_count' => ['type' => 'integer'],
+            'today_bookings' => ['type' => 'array', 'items' => ['type' => 'object']],
+        ];
+
+        if ($withProfile) {
+            $properties = [
+                'first_name' => ['type' => 'string', 'nullable' => true],
+                'last_name' => ['type' => 'string', 'nullable' => true],
+                'display_name' => ['type' => 'string', 'nullable' => true],
+                'brief_bio' => ['type' => 'string', 'nullable' => true],
+                'street' => ['type' => 'string', 'nullable' => true],
+                'city' => ['type' => 'string', 'nullable' => true],
+                'province' => ['type' => 'string', 'nullable' => true],
+                'country' => ['type' => 'string', 'nullable' => true],
+                'postal_code' => ['type' => 'string', 'nullable' => true],
+                'phone' => ['type' => 'string', 'nullable' => true],
+                'occupation' => ['type' => 'string', 'nullable' => true],
+                'guide' => ['type' => 'string', 'enum' => ['Yes', 'No']],
+                'guide_number' => ['type' => 'string', 'nullable' => true],
+                'driver_license_number' => ['type' => 'string', 'nullable' => true],
+                'license_plate' => ['type' => 'string', 'nullable' => true],
+                'vehicle_description' => ['type' => 'string', 'nullable' => true],
+                'vehicle_year' => ['type' => 'string', 'nullable' => true],
+                'vehicle_make' => ['type' => 'string', 'nullable' => true],
+                'vehicle_model' => ['type' => 'string', 'nullable' => true],
+                'vehilcle_color' => [
+                    'type' => 'string', 'nullable' => true,
+                    'description' => 'Spelled as the column is spelled.',
+                ],
+                'other_features' => ['type' => 'string', 'nullable' => true],
+            ] + $properties;
+        }
+
+        return ['type' => 'object', 'properties' => $properties];
+    }
+
+    /** The four notification switches, as the settings endpoints report them. */
+    private static function notificationFlags(): array
+    {
+        return [
+            'type' => 'object',
+            'properties' => [
+                'configured' => [
+                    'type' => 'boolean',
+                    'description' => 'False when the user has never chosen and these are the defaults.',
+                ],
+                'all_notifications' => ['type' => 'boolean'],
+                'wildlife_notifications' => ['type' => 'boolean'],
+                'awareness_notifications' => ['type' => 'boolean'],
+                'subscriber_notifications' => ['type' => 'boolean'],
+            ],
+        ];
+    }
+
     private static function itemsOf(string $ref): array
     {
         return [
@@ -987,6 +1068,317 @@ MD;
                         ],
                     ]]],
                 ]) + $authFailures,
+            ]],
+
+            '/v1/security/version-check' => ['get' => [
+                'tags' => ['Security'],
+                'summary' => 'Whether the caller is on the current build, plus reference data',
+                'description' => 'Open, because the app calls this before anyone has signed in. '
+                    .'Returns the lists the app needs to render its pickers, and the prices it quotes. '
+                    .'Two changes from the previous version. Versions are compared with version_compare '
+                    .'rather than a string operator: the old comparison reported no update to any iOS '
+                    .'client on 2.6 through 2.9 while 2.54 was shipping. And the reference lists are '
+                    .'arrays, where they used to be objects keyed by their own values.',
+                'security' => [],
+                'parameters' => [
+                    self::param('os', 'string', 'ios or android.', true),
+                    self::param('version', 'string', 'The version the caller is running, such as 8.4.8.', true),
+                ],
+                'responses' => self::ok('Update status and reference data.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'hasUpdate' => ['type' => 'boolean'],
+                        'current_version' => ['type' => 'string'],
+                        'message' => [
+                            'type' => 'string', 'nullable' => true,
+                            'description' => 'The update message, or null when there is no update. Always present.',
+                        ],
+                        'alert' => [
+                            'type' => 'object', 'nullable' => true,
+                            'description' => 'Always null. Reserved for a service-wide notice.',
+                        ],
+                        'features' => ['type' => 'array', 'items' => ['type' => 'object']],
+                        'land_rules' => ['type' => 'array', 'items' => ['type' => 'object']],
+                        'booking_reasons' => ['type' => 'array', 'items' => ['type' => 'string']],
+                        'property_request_reasons' => ['type' => 'array', 'items' => ['type' => 'string']],
+                        'open_property_request_reasons' => ['type' => 'array', 'items' => ['type' => 'string']],
+                        'open_property_request_activity_types' => ['type' => 'array', 'items' => ['type' => 'string']],
+                        'checkout_categories' => ['type' => 'object'],
+                        'signage_options' => ['type' => 'array', 'items' => ['type' => 'object']],
+                        'subscription_types' => ['type' => 'array', 'items' => ['type' => 'object']],
+                    ],
+                ]) + self::failures([
+                    404 => 'No such app platform.',
+                    422 => 'os or version missing.',
+                ]),
+            ]],
+
+            '/v1/security/forgot-password' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Send a password reset link',
+                'description' => 'Always reports success, whether or not the address has an account. '
+                    .'The previous version returned the validation error, which said there is no user '
+                    .'with this email address, so anyone could check whether an address was registered. '
+                    .'The link is served by the Yii application, which owns the reset page. '
+                    .'Rate limited per IP.',
+                'security' => [],
+                'requestBody' => self::formBody(
+                    ['email' => 'The account email address.'],
+                    ['email'],
+                ),
+                'responses' => self::ok('Accepted.', [
+                    'type' => 'object',
+                    'properties' => ['message' => ['type' => 'string']],
+                ]) + self::failures([
+                    422 => 'Not a valid email address.',
+                    429 => 'Too many attempts.',
+                ]),
+            ]],
+
+            '/v1/security/logout' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Stop push notifications for this device',
+                'description' => 'Forgets the device push token. It does not invalidate the API token: '
+                    .'auth_key is one value per account, shared with every other signed-in device and '
+                    .'with the old API, so clearing it would sign the user out everywhere. Changing a '
+                    .'password or deactivating does rotate it. Without device_token, every token for '
+                    .'that OS is forgotten.',
+                'requestBody' => self::formBody([
+                    'os' => 'ios or android. Required.',
+                    'device_token' => 'The push token to forget. Optional.',
+                ], ['os']),
+                'responses' => self::ok('How many device tokens were forgotten.', [
+                    'type' => 'object',
+                    'properties' => ['forgotten' => ['type' => 'integer']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'os missing or not recognised.',
+                ]),
+            ]],
+
+            '/v1/user/signup' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Create an account',
+                'description' => 'Creates the user and profile rows together and emails a confirmation '
+                    .'link. The account works for seven days before it is confirmed. Usernames follow '
+                    .'the same rule as the web application: a letter, then letters, digits or '
+                    .'underscores, 3 to 20 characters. Rate limited per IP.',
+                'security' => [],
+                'requestBody' => self::formBody([
+                    'username' => 'Required. A letter, then word characters, 3 to 20.',
+                    'email' => 'Required and unique.',
+                    'password' => 'Required, at least 6 characters.',
+                    'first_name' => 'Required.',
+                    'last_name' => 'Required.',
+                    'terms_of_use' => 'Required. Must be accepted.',
+                    'display_name' => 'Optional. Defaults to the full name.',
+                    'guide_number' => 'Optional. Setting one marks the profile as a guide.',
+                    'vehicle_description' => 'Optional.',
+                ], ['username', 'email', 'password', 'first_name', 'last_name', 'terms_of_use']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'The account, with a token, plus whether the confirmation mail was sent.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => self::account()]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    422 => 'Validation failed; see errors.',
+                    429 => 'Too many attempts.',
+                ]),
+            ]],
+
+            '/v1/user/send-confirmation-code' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Resend the email confirmation link',
+                'description' => 'Works signed in and signed out. A signed-in caller is asking about '
+                    .'their own account and gets a specific answer, including 409 when it is already '
+                    .'confirmed. A caller supplying only an email gets the same reply whatever the '
+                    .'address turns out to be, because the previous version distinguished unknown, '
+                    .'already confirmed and sent, which reported whether any address had an account. '
+                    .'That version was also a GET. Rate limited per IP.',
+                'security' => [],
+                'requestBody' => self::formBody([
+                    'email' => 'Required when no token is sent.',
+                    'token' => 'Optional. When valid, the answer is about that account.',
+                ], []),
+                'responses' => self::ok('Accepted.', [
+                    'type' => 'object',
+                    'properties' => ['message' => ['type' => 'string']],
+                ]) + self::failures([
+                    409 => 'This account has already been confirmed. Signed-in callers only.',
+                    422 => 'No token and no valid email address.',
+                    429 => 'Too many attempts.',
+                ]),
+            ]],
+
+            '/v1/user/get' => ['get' => [
+                'tags' => ['User'],
+                'summary' => 'The callers own account and profile',
+                'description' => 'The account block login returns, plus the editable profile columns. '
+                    .'Those are an allowlist: the previous version returned every column of the row, '
+                    .'which included pipedrive_person_id, the accounts identifier in the companys CRM, '
+                    .'along with the gravatar bookkeeping.',
+                'responses' => self::ok('The account and profile.', self::account(withProfile: true))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/user/update-address' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Update name, address and phone',
+                'description' => 'Writes to the callers own profile. The previous version took the '
+                    .'profile from a uid parameter and never checked the token against it.',
+                'requestBody' => self::formBody(['first_name' => 'Required.', 'last_name' => 'Required.', 'street' => 'Required.', 'city' => 'Required.', 'province' => 'Required.', 'country' => 'Required.', 'postal_code' => 'Required.', 'phone' => 'Required, 10 to 15 digits.'], [
+                    'first_name', 'last_name', 'street', 'city', 'province',
+                    'country', 'postal_code', 'phone',
+                ]),
+                'responses' => self::ok('The updated account and profile.', self::account(withProfile: true))
+                    + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        422 => 'Validation failed; see errors.',
+                    ]),
+            ]],
+
+            '/v1/user/update-vehicle-info' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Update vehicle and licence details',
+                'description' => 'Writes to the callers own profile. Note the column spelling '
+                    .'vehilcle_color, which is kept because the database uses it.',
+                'requestBody' => self::formBody([
+                    'driver_license_number' => 'Required.',
+                    'vehicle_description' => 'Optional.',
+                    'vehicle_year' => 'Optional.',
+                    'vehicle_make' => 'Optional.',
+                    'vehicle_model' => 'Optional.',
+                    'vehilcle_color' => 'Optional. Spelled as the column is spelled.',
+                    'license_plate' => 'Optional.',
+                    'other_features' => 'Optional.',
+                ], ['driver_license_number']),
+                'responses' => self::ok('The updated account and profile.', self::account(withProfile: true))
+                    + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        422 => 'Validation failed; see errors.',
+                    ]),
+            ]],
+
+            '/v1/user/update-profile' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Update the whole profile',
+                'description' => 'Both of the sets above, plus the bio fields. A recorded guide number '
+                    .'is what marks a profile as a guide; clearing it clears the flag.',
+                'requestBody' => self::formBody(['first_name' => 'Required.', 'last_name' => 'Required.', 'street' => 'Required.', 'city' => 'Required.', 'province' => 'Required.', 'country' => 'Required.', 'postal_code' => 'Required.', 'phone' => 'Required, 10 to 15 digits.',
+                    'driver_license_number' => 'Required.',
+                    'display_name' => 'Optional.',
+                    'brief_bio' => 'Optional.',
+                    'occupation' => 'Optional.',
+                    'guide_number' => 'Optional.',
+                    'vehicle_description' => 'Optional.',
+                    'vehicle_year' => 'Optional.',
+                    'vehicle_make' => 'Optional.',
+                    'vehicle_model' => 'Optional.',
+                    'vehilcle_color' => 'Optional.',
+                    'license_plate' => 'Optional.',
+                    'other_features' => 'Optional.',
+                ], [
+                    'first_name', 'last_name', 'street', 'city', 'province',
+                    'country', 'postal_code', 'phone', 'driver_license_number',
+                ]),
+                'responses' => self::ok('The updated account and profile.', self::account(withProfile: true))
+                    + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        422 => 'Validation failed; see errors.',
+                    ]),
+            ]],
+
+            '/v1/user/account' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Change the password',
+                'description' => 'Verifies the current password, then rotates the API token, which the '
+                    .'previous version did not: a password changed because it might have leaked left '
+                    .'every token issued under the old one working. Rotating signs the account out of '
+                    .'every other device, so the new token is returned here.',
+                'requestBody' => self::formBody([
+                    'current_password' => 'Required.',
+                    'new_password' => 'Required, at least 6 characters.',
+                ], ['current_password', 'new_password']),
+                'responses' => self::ok('The new token.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'token' => ['type' => 'string', 'description' => 'Replaces the token used for this call.'],
+                        'message' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Wrong current password, or the new one is too short.',
+                ]),
+            ]],
+
+            '/v1/user/deactivate' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Close the account',
+                'description' => 'Blocks the account and rotates the token, so every signed-in device '
+                    .'stops working at once. Nothing is deleted: the requests and listings are '
+                    .'referenced by other peoples records. An account part-way through a six month '
+                    .'subscription cannot be closed this way, which is carried over.',
+                'responses' => self::ok('Closed.', [
+                    'type' => 'object',
+                    'properties' => ['deactivated' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'A six month subscription is still running.',
+                ]),
+            ]],
+
+            '/v1/user/report-issue' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Report a problem to the administrators',
+                'description' => 'Sent from the applications own address with the reporter in Reply-To. '
+                    .'The previous version set From to the reporters address, which fails SPF and DKIM '
+                    .'for any domain they do not own, and put their text into the message unescaped.',
+                'requestBody' => self::formBody([
+                    'subject' => 'Required.',
+                    'issue_type' => 'Required.',
+                    'message' => 'Required, up to 5000 characters.',
+                ], ['subject', 'issue_type', 'message']),
+                'responses' => self::ok('Sent.', [
+                    'type' => 'object',
+                    'properties' => ['reported' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/user-settings/get-notification-settings' => ['get' => [
+                'tags' => ['User'],
+                'summary' => 'Which notifications the caller wants',
+                'description' => 'Returns the switches in effect. Only 11 accounts of 5,600 have ever '
+                    .'set these; the previous version answered everyone else with an error, so this '
+                    .'returns the defaults instead and reports whether the user has chosen.',
+                'responses' => self::ok('The switches in effect.', self::notificationFlags())
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/user-settings/save-notification-settings' => ['post' => [
+                'tags' => ['User'],
+                'summary' => 'Change which notifications the caller wants',
+                'description' => 'Each switch is independent: only the ones named in the request are '
+                    .'changed. The previous version defaulted every absent switch to Yes, so a request '
+                    .'that turned one off turned the other three back on.',
+                'requestBody' => self::formBody([
+                    'all_notifications' => 'Optional boolean.',
+                    'wildlife_notifications' => 'Optional boolean.',
+                    'awareness_notifications' => 'Optional boolean.',
+                    'subscriber_notifications' => 'Optional boolean.',
+                ], []),
+                'responses' => self::ok('The switches now in effect.', self::notificationFlags())
+                    + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        422 => 'A switch was not a boolean.',
+                    ]),
             ]],
         ];
     }

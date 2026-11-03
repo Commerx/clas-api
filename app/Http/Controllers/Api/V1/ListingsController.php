@@ -399,11 +399,6 @@ class ListingsController extends Controller
         return [$land, null];
     }
 
-    private function userId(Request $request): int
-    {
-        return (int) $request->attributes->get('api_user')->id;
-    }
-
     private function activeListingExists(int $landId): bool
     {
         return DB::table('land')

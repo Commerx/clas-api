@@ -3,6 +3,7 @@
 use App\Http\ApiResponse;
 use App\Http\Middleware\AuthenticateToken;
 use App\Http\Middleware\DocsEnabled;
+use App\Http\Middleware\IdentifyToken;
 use App\Support\ApiPath;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -25,6 +26,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'auth.token' => AuthenticateToken::class,
+            'auth.identify' => IdentifyToken::class,
             'docs.enabled' => DocsEnabled::class,
         ]);
     })

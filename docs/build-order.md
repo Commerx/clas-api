@@ -42,7 +42,7 @@ written.
 |---|---|---|---|---|
 | 1 | Mail infrastructure | — | 15 endpoints | do first |
 | 2 | Requests: submit, upcoming, today-bookings | 3 | core loop | first handover milestone |
-| 3 | User, UserSettings, Security | 15 | onboarding | excludes user/subscribe |
+| 3 | User, UserSettings, Security | 14 | onboarding | **done** |
 | 4 | Notifications remainder | 8 | — | needs mail |
 | 5 | HuntersTags, Chat, Wmu, FishingLands | 17 | — | self-contained |
 | 6 | ManageListings, non-payment | 18 | — | largest controller |
@@ -69,18 +69,39 @@ Configure SMTP for staging and verify a real send end to end — 2h
 ```
 ```
 
-### 3. User, settings and security
+### 3. User, settings and security — DONE
 
-```
-Port user/register and the email confirmation flow — 6h
-Port user/login-related remainder: forgot-password, logout — 4h
-Port security/version-check, replacing the broken string version comparison — 3h
-Port user profile read and update endpoints — 6h
-Port user/delete-account and its data handling — 4h
-Port the remaining User controller endpoints — 8h
-Port UserSettings endpoints — 3h
-Contract tests and OpenAPI entries for the user and security group — 4h
-```
+All fourteen endpoints: signup and the confirmation flow, forgot-password,
+logout, version-check, user/get, the three profile writes, the password
+change, deactivate, report-issue, and the two UserSettings endpoints.
+
+`user/subscribe` and `user/apply-promocode` were in the old UserController but
+both run card payments through Moneris, so they are counted under payments
+rather than here.
+
+What changed beyond translation, and why each one is a change rather than a
+port:
+
+- **The three profile writes had no access control at all.** Each assigned
+  `$user = User::findOne(['auth_key' => ..., 'id' => $uid])` and never read
+  the result, and the controller carried no access filter — so the profile
+  written was whichever one `uid` named, with no valid token required. They
+  now act on the account the token identifies, `uid` cannot steer a write,
+  and two tests plus a source guard hold that.
+- **version-check compared versions with `>`.** iOS ships 2.54, so no client
+  on 2.6 through 2.9 was ever told an update existed. Now `version_compare`.
+- **forgot-password and send-confirmation-code reported whether an address
+  had an account.** Both answer uniformly now, and the three open endpoints
+  that send mail are rate limited.
+- **The password change left old tokens working.** It now rotates `auth_key`
+  and returns the new token.
+- **report-issue sent mail as the user and interpolated their text
+  unescaped.** Now sent from the application with the user in `Reply-To`,
+  through a Blade template.
+- **user/get returned every profile column**, `pipedrive_person_id` included.
+  Now an allowlist of 50 fields.
+- **save-notification-settings defaulted every absent switch to Yes**, so
+  changing one turned the other three back on. Each is independent now.
 
 ### 4. Notifications
 
@@ -145,24 +166,36 @@ Decide and document the old API sunset date and the forced-update trigger — 2h
 |---|---|
 | 1. Mail infrastructure | 12 |
 | 2. Finish Requests | 0 |
-| 3. User, settings, security | 38 |
+| 3. User, settings, security | 0 |
 | 4. Notifications | 28 |
 | 5. Self-contained features | 28 |
 | 6. ManageListings | 66 |
 | 7. Payments | 60 |
 | Cross-cutting | 19 |
-| **Total** | **251** |
+| **Total** | **213** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest
 has moved, since both read the same database.
 
-Excluding payments and cross-cutting: **193 hours** to finish every endpoint
+Excluding payments and cross-cutting: **155 hours** to finish every endpoint
 the new app needs apart from paying for things.
 
 ## What is already done
 
-Login, token middleware, two notifications endpoints, all thirteen Listings
-endpoints, and thirteen of sixteen Requests endpoints — 29 in total, with
-interactive documentation at `/docs`, 63 tests, and three enforced rules that
-hold for endpoints nobody has written yet (see `CLAUDE.md`).
+**46 endpoints.** Token middleware, all thirteen Listings endpoints, all
+sixteen Requests endpoints, two of ten Notifications endpoints, and the
+fourteen in the user, settings and security group.
+
+Interactive documentation at `/docs` covers every one of them, with 110 tests
+and six enforced rules that hold for endpoints nobody has written yet (see
+`CLAUDE.md`):
+
+- no controller may `select('*')`
+- every route carries `auth.token` unless named in an explicit public list
+- nothing may stay in that public list once it is guarded
+- every open endpoint that sends mail is rate limited
+- no controller may read an account id from the request
+- every route appears in the OpenAPI document
+
+The API is served from `/v1/`, on its own host, with no `/api` segment.

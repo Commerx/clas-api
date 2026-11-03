@@ -822,9 +822,4 @@ class RequestsController extends Controller
 
         return ApiResponse::data(['items' => RequestRow::formatAll($query->get())]);
     }
-
-    private function userId(Request $request): int
-    {
-        return (int) $request->attributes->get('api_user')->id;
-    }
 }
