@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V7;
 
 use App\Http\ApiResponse;
 use App\Http\Controllers\Controller;
+use App\Services\RequestNotifier;
 use App\Support\V7\ListingAccess;
 use App\Support\V7\RequestRow;
 use Illuminate\Http\JsonResponse;
@@ -218,6 +219,276 @@ class RequestsController extends Controller
         }
 
         return ApiResponse::data(['item' => $item]);
+    }
+
+    /**
+     * Accept or decline a request. Owner or accepted manager only.
+     *
+     * The row written matches the old application's exactly: status,
+     * decision_at, decision_by, and the two read flags flipped so the decision
+     * shows as unread to the requester and read to the owner.
+     */
+    public function accept(Request $request, RequestNotifier $notifier): JsonResponse
+    {
+        return $this->decide($request, $notifier, 'Accepted');
+    }
+
+    public function decline(Request $request, RequestNotifier $notifier): JsonResponse
+    {
+        return $this->decide($request, $notifier, 'Declined');
+    }
+
+    /**
+     * Cancel a request. The requester's own, and only while it is still
+     * Pending or Accepted — a cancelled or completed booking cannot be
+     * cancelled again.
+     */
+    public function cancel(Request $request, RequestNotifier $notifier): JsonResponse
+    {
+        [$booking, $failure] = $this->ownRequest($request, ['Pending', 'Accepted']);
+
+        if ($failure !== null) {
+            return $failure;
+        }
+
+        DB::table('requests')
+            ->where('request_id', $booking->request_id)
+            ->update(['status' => 'Cancelled', 'cancelled_at' => time()]);
+
+        $notifier->cancelled($booking, $this->listingFor($booking));
+
+        return ApiResponse::data(['request_id' => (int) $booking->request_id, 'status' => 'Cancelled']);
+    }
+
+    /** Check in to an accepted booking. */
+    public function checkin(Request $request, RequestNotifier $notifier): JsonResponse
+    {
+        [$booking, $failure] = $this->ownRequest($request, ['Accepted']);
+
+        if ($failure !== null) {
+            return $failure;
+        }
+
+        // The old application had a date check here, commented out, so a
+        // booking can be checked into on any day. Left as it is: changing it
+        // would change behaviour for the apps still using the other API.
+        $at = date('Y-m-d H:i:s');
+
+        DB::table('requests')
+            ->where('request_id', $booking->request_id)
+            ->update(['status' => 'Checked In', 'checkedin_datetime' => $at]);
+
+        $notifier->checkedIn($booking, $this->listingFor($booking));
+
+        return ApiResponse::data([
+            'request_id' => (int) $booking->request_id,
+            'status' => 'Checked In',
+            'checkedin_datetime' => $at,
+        ]);
+    }
+
+    /**
+     * Check out of a booking, recording what the visitor reports.
+     *
+     * `suspicious_activity` and `harvest_animal` are the requester's own
+     * answers at check-out, not anything held about them.
+     */
+    public function checkout(Request $request, RequestNotifier $notifier): JsonResponse
+    {
+        // harvest_animal is an enum in the database. Unvalidated, anything
+        // else reaches MySQL and comes back as a 500 under strict mode rather
+        // than telling the client what was wrong with the request.
+        $validator = Validator::make($request->all(), [
+            'harvest_animal' => ['nullable', 'in:Yes,No'],
+            'suspicious_activity' => ['nullable', 'string', 'max:65535'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        [$booking, $failure] = $this->ownRequest($request, ['Checked In']);
+
+        if ($failure !== null) {
+            return $failure;
+        }
+
+        $at = date('Y-m-d H:i:s');
+
+        $changes = [
+            'status' => 'Checked Out',
+            'checkedout_datetime' => $at,
+            'send_app_review_email' => 1,
+            'suspicious_activity' => trim((string) $request->input('suspicious_activity', '')),
+        ];
+
+        // Only overwritten when supplied, as before.
+        if ($harvest = $request->input('harvest_animal')) {
+            $changes['harvest_animal'] = $harvest;
+        }
+
+        DB::table('requests')->where('request_id', $booking->request_id)->update($changes);
+
+        $notifier->checkedOut(
+            $booking,
+            $this->listingFor($booking),
+            $request->input('category'),
+            $request->input('sub_category'),
+        );
+
+        return ApiResponse::data([
+            'request_id' => (int) $booking->request_id,
+            'status' => 'Checked Out',
+            'checkedout_datetime' => $at,
+        ]);
+    }
+
+    /**
+     * Mark a request read, on whichever side the caller is.
+     *
+     * `is_owner=1` marks the owner side and needs owner or manager access;
+     * otherwise the requester marks their own.
+     */
+    public function markRead(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'request_id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $booking = DB::table('requests')
+            ->where('request_id', (int) $request->input('request_id'))
+            ->first();
+
+        if ($booking === null) {
+            return ApiResponse::notFound('No such request.');
+        }
+
+        $userId = $this->userId($request);
+        $asOwner = filter_var($request->input('is_owner', false), FILTER_VALIDATE_BOOLEAN);
+
+        if ($asOwner) {
+            if (! ListingAccess::canManage($userId, (int) $booking->land_id)) {
+                return ApiResponse::notFound('No such request.');
+            }
+
+            $column = 'is_owner_read';
+        } else {
+            if ((int) $booking->requester_id !== $userId) {
+                return ApiResponse::notFound('No such request.');
+            }
+
+            $column = 'is_user_read';
+        }
+
+        DB::table('requests')
+            ->where('request_id', $booking->request_id)
+            ->update([$column => 1]);
+
+        return ApiResponse::data(['request_id' => (int) $booking->request_id, $column => true]);
+    }
+
+    /** Delete one of the caller's own requests. */
+    public function destroy(Request $request): JsonResponse
+    {
+        [$booking, $failure] = $this->ownRequest($request, null);
+
+        if ($failure !== null) {
+            return $failure;
+        }
+
+        DB::table('requests')->where('request_id', $booking->request_id)->delete();
+
+        return ApiResponse::data(['deleted' => (int) $booking->request_id]);
+    }
+
+    private function decide(Request $request, RequestNotifier $notifier, string $decision): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'request_id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $booking = DB::table('requests')
+            ->where('request_id', (int) $request->input('request_id'))
+            ->first();
+
+        if ($booking === null) {
+            return ApiResponse::notFound('No such request.');
+        }
+
+        if (! ListingAccess::canManage($this->userId($request), (int) $booking->land_id)) {
+            return ApiResponse::notFound('No such request.');
+        }
+
+        if (in_array($booking->status, ['Checked In', 'Checked Out', 'Cancelled'], true)) {
+            return ApiResponse::error('That request can no longer be decided.', 409);
+        }
+
+        DB::table('requests')
+            ->where('request_id', $booking->request_id)
+            ->update([
+                'status' => $decision,
+                'decision_at' => time(),
+                'decision_by' => $this->userId($request),
+                'is_owner_read' => 1,
+                'is_user_read' => 0,
+            ]);
+
+        $notifier->decided($booking, $this->listingFor($booking), $decision);
+
+        return ApiResponse::data([
+            'request_id' => (int) $booking->request_id,
+            'status' => $decision,
+        ]);
+    }
+
+    /**
+     * A request the caller made themselves, optionally restricted to the
+     * statuses the transition allows.
+     *
+     * @param  list<string>|null  $allowedStatuses
+     * @return array{0: ?object, 1: ?JsonResponse}
+     */
+    private function ownRequest(Request $request, ?array $allowedStatuses): array
+    {
+        $validator = Validator::make($request->all(), [
+            'request_id' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return [null, ApiResponse::invalid($validator->errors()->toArray())];
+        }
+
+        $booking = DB::table('requests')
+            ->where('request_id', (int) $request->input('request_id'))
+            ->where('requester_id', $this->userId($request))
+            ->first();
+
+        if ($booking === null) {
+            return [null, ApiResponse::notFound('No such request.')];
+        }
+
+        if ($allowedStatuses !== null && ! in_array($booking->status, $allowedStatuses, true)) {
+            return [null, ApiResponse::error(
+                sprintf('A request that is %s cannot be changed this way.', strtolower($booking->status)),
+                409
+            )];
+        }
+
+        return [$booking, null];
+    }
+
+    private function listingFor(object $booking): object
+    {
+        return DB::table('land')->where('land_id', $booking->land_id)->first()
+            ?? (object) ['land_id' => $booking->land_id, 'land_name' => null];
     }
 
     private function requesterList(Request $request, bool $includeExpired): JsonResponse

@@ -41,6 +41,16 @@ Route::prefix('v7')->group(function () {
         Route::get('requests/listing-bookings', [RequestsController::class, 'listingBookings']);
         Route::get('requests/detail', [RequestsController::class, 'detail']);
 
+        // Booking lifecycle. Decisions are owner-or-manager; the rest are the
+        // requester's own. Rows written match the old application exactly.
+        Route::post('requests/accept', [RequestsController::class, 'accept']);
+        Route::post('requests/decline', [RequestsController::class, 'decline']);
+        Route::post('requests/cancel', [RequestsController::class, 'cancel']);
+        Route::post('requests/checkin', [RequestsController::class, 'checkin']);
+        Route::post('requests/checkout', [RequestsController::class, 'checkout']);
+        Route::post('requests/read', [RequestsController::class, 'markRead']);
+        Route::post('requests/delete-request', [RequestsController::class, 'destroy']);
+
         /*
          * Writes. These share the clas database with the old application, so
          * the rows they create are identical to the ones it created — only

@@ -685,6 +685,156 @@ MD;
                 ]),
             ]],
 
+            '/api/v7/requests/accept' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Accept a request',
+                'description' => 'Owner, or a manager whose invitation was accepted. Records the decision and marks it unread for the requester and read for the owner.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'status' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or no access to it.',
+                    409 => 'The request can no longer be decided.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/decline' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Decline a request',
+                'description' => 'Owner, or a manager whose invitation was accepted.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'status' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or no access to it.',
+                    409 => 'The request can no longer be decided.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/cancel' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Cancel your own request',
+                'description' => 'The requester only, and only while the request is Pending or Accepted.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'status' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or it is not yours.',
+                    409 => 'The request is not in a state that allows this.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/checkin' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Check in to an accepted booking',
+                'description' => 'The requester only. There is no date restriction: the old date check was commented out and that behaviour is preserved.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'status' => ['type' => 'string'],
+                        'checkedin_datetime' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or it is not yours.',
+                    409 => 'The request is not in a state that allows this.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/checkout' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Check out of a booking',
+                'description' => 'The requester only, from a Checked In booking. suspicious_activity and harvest_animal are the visitor own report at check-out, not anything held about them.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                    'suspicious_activity' => 'What the visitor reports seeing.',
+                    'harvest_animal' => 'What was harvested, if anything.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'status' => ['type' => 'string'],
+                        'checkedout_datetime' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or it is not yours.',
+                    409 => 'The request is not in a state that allows this.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/read' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Mark a request read',
+                'description' => 'Send is_owner=1 to mark the owner side, which needs owner or manager access; otherwise the requester marks their own side.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                    'is_owner' => 'Set to 1 to mark the owner side.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+                        'is_user_read' => ['type' => 'string'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or no access to it.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
+            '/api/v7/requests/delete-request' => ['post' => [
+                'tags' => ['Requests'],
+                'summary' => 'Delete your own request',
+                'description' => 'The requester only. The row is removed.',
+                'requestBody' => self::formBody([
+                    'request_id' => 'Request id.',
+                ], ['request_id']),
+                'responses' => self::ok('The request after the change.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'request_id' => ['type' => 'integer'],
+
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such request, or no access to it.',
+                    422 => 'Parameters failed validation.',
+                ]),
+            ]],
+
             '/api/v7/notifications/list' => ['get' => [
                 'tags' => ['Notifications'],
                 'summary' => 'Notifications for the signed-in user',
