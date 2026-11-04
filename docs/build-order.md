@@ -43,7 +43,7 @@ written.
 | 1 | Mail infrastructure | — | 15 endpoints | do first |
 | 2 | Requests: submit, upcoming, today-bookings | 3 | core loop | first handover milestone |
 | 3 | User, UserSettings, Security | 14 | onboarding | **done** |
-| 4 | Notifications remainder | 8 | — | needs mail |
+| 4 | Notifications remainder | 8 | — | **done** |
 | 5 | HuntersTags, Chat, Wmu, FishingLands | 17 | — | self-contained |
 | 6 | ManageListings, non-payment | 18 | — | largest controller |
 | 7 | Payments | 10 | Stripe decision | do not port Moneris |
@@ -103,16 +103,62 @@ port:
 - **save-notification-settings defaulted every absent switch to Yes**, so
   changing one turned the other three back on. Each is independent now.
 
-### 4. Notifications
+### 4. Notifications — DONE
 
-```
-Port notifications/submit and the subscriber fan-out — 6h
-Port notifications/hunting-alert — 5h
-Port notifications/community-awareness — 4h
-Port notifications/read, get-notification, delete-notification — 5h
-Port notifications/report-notification and subscriber-notification — 5h
-Contract tests and OpenAPI entries for notifications — 3h
-```
+All eight: submit, community-awareness, subscriber-notification,
+hunting-alert, get-notification, read, delete-notification and
+report-notification.
+
+The fan-out was written out four times in the old controller — once in submit
+and once in each dedicated endpoint — and the four had drifted. It is now one
+service, `App\Services\NotificationBroadcast`, which is where the differences
+between those four are recorded.
+
+What changed beyond translation:
+
+- **Anyone could post to any listing's subscribers.** The old endpoint checked
+  only that the listing existed, and recipients read these as coming from the
+  property they chose to follow; one sub-category is "Product/Service
+  Advertisement". Now owner or accepted manager, refused as 404.
+- **`all_notifications` did nothing.** The condition was
+  `all_notifications == 'Yes' || <specific> == 'Yes'`, so turning it off had
+  no effect unless every specific switch was off too. It is a master switch
+  now.
+- **Nobody without a settings row was ever pushed.** The old code required the
+  row to exist; 11 accounts of 5,600 have one, so push reached almost nobody
+  even where it worked.
+- **`read` was a GET that wrote.** Now a POST.
+- **Push has been dead since July 2024.** The old code posts to FCM's legacy
+  endpoint with a server key hardcoded in the controller, and Google retired
+  that API; nothing read the response, so it failed silently. See the note
+  below — this needs a decision, not just a port.
+- **PEASI was reached from `submit` only,** not from the dedicated
+  hunting-alert endpoint, and posted to a hardcoded `…-dev.peasi.ca` URL with
+  a token in the source. Now configuration, off by default.
+- **report-notification left `is_reported` unset** although the column exists,
+  so a user could report the same message repeatedly with no sign of it. Mail
+  also went out as the reporting user, failing SPF and DKIM.
+- **get-notification selected every column.** Now an allowlist.
+
+### Two things this group surfaced that are not code
+
+**Push notifications need an FCM decision.** The transport is written against
+FCM's v1 API and is configuration-gated; until a service account is supplied
+the driver stays `log`, which records every intended push without sending it.
+The fan-out — who receives what, and whose settings suppress a push — is
+complete and tested either way. Supplying the credentials is the remaining
+step, and it is worth telling the client that push has not worked since July
+2024 regardless of this rebuild.
+
+**Proximity alerts reach nobody, and that is a data problem.** A profile
+position is whatever coordinates a client last sent, and a client without a
+location sends the map's default centre. On the local copy, 5,610 of 5,611
+profiles sit at exactly that one point, and **no real active listing has
+anybody within 25 km of it**. A further 332 listings have no coordinates at
+all. Community awareness is therefore inert today, in both applications. The
+rebuild preserves the rule deliberately rather than papering over it. Note
+that fixing the position capture would, on its own, turn a single alert into a
+push to thousands — so the two decisions belong together.
 
 ### 5. Self-contained features
 
@@ -152,42 +198,46 @@ Payment tests against Stripe test keys — 6h
 ### Cross-cutting, to schedule alongside
 
 ```
-Rotate the Google timezone API key that was committed in the old repository — 1h
+Rotate the four secrets committed in the old repository: the Google timezone
+key, the Moneris store id and API token, the FCM server key and the PEASI
+token — 2h
 Produce the field-by-field change report for the app developer — 2h
 Set up the staging subdomain, TLS and DNS for the new API — 4h
 Deploy pipeline from the repository to the staging server — 4h
 Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
+Supply an FCM service account so push can be delivered at all — 3h
+Decide what to do about profile positions, which are the map default for 5,610 of 5,611 users — 4h
 ```
 
 ## Totals
 
 | Group | Hours |
 |---|---|
-| 1. Mail infrastructure | 12 |
+| 1. Mail infrastructure | 0 |
 | 2. Finish Requests | 0 |
 | 3. User, settings, security | 0 |
-| 4. Notifications | 28 |
+| 4. Notifications | 0 |
 | 5. Self-contained features | 28 |
 | 6. ManageListings | 66 |
 | 7. Payments | 60 |
-| Cross-cutting | 19 |
-| **Total** | **213** |
+| Cross-cutting | 27 |
+| **Total** | **181** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest
 has moved, since both read the same database.
 
-Excluding payments and cross-cutting: **155 hours** to finish every endpoint
+Excluding payments and cross-cutting: **94 hours** to finish every endpoint
 the new app needs apart from paying for things.
 
 ## What is already done
 
-**46 endpoints.** Token middleware, all thirteen Listings endpoints, all
-sixteen Requests endpoints, two of ten Notifications endpoints, and the
-fourteen in the user, settings and security group.
+**54 endpoints.** Token middleware, all thirteen Listings endpoints, all
+sixteen Requests endpoints, all ten Notifications endpoints, and the fourteen
+in the user, settings and security group.
 
-Interactive documentation at `/docs` covers every one of them, with 110 tests
+Interactive documentation at `/docs` covers every one of them, with 124 tests
 and six enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 

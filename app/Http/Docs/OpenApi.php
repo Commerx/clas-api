@@ -380,6 +380,27 @@ MD;
         return ['type' => 'object', 'properties' => $properties];
     }
 
+    /** What a broadcast reports back: the row it created and who it reached. */
+    private static function broadcastResult(): array
+    {
+        return [
+            'type' => 'object',
+            'properties' => [
+                'id' => ['type' => 'integer', 'description' => 'The notification created.'],
+                'recipients' => [
+                    'type' => 'integer',
+                    'description' => 'How many people received a copy in their list.',
+                ],
+                'pushed' => [
+                    'type' => 'integer',
+                    'description' => 'How many devices a push was sent to. Lower than '
+                        .'recipients when people have turned notifications off, or have no '
+                        .'registered device.',
+                ],
+            ],
+        ];
+    }
+
     /** The four notification switches, as the settings endpoints report them. */
     private static function notificationFlags(): array
     {
@@ -1379,6 +1400,242 @@ MD;
                         401 => 'Missing, unknown or mismatched token.',
                         422 => 'A switch was not a boolean.',
                     ]),
+            ]],
+
+            '/v1/notifications/community-awareness' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Alert everyone near a listing',
+                'description' => 'Creates a category 1 notification and sends it to every '
+                    .'profile whose recorded position is within the configured radius, 25 km by '
+                    .'default, with a push to those who want one. '
+                    .'Worth knowing before judging this endpoint: a profile position is whatever '
+                    .'coordinates a client last sent, and a client without a location sends the '
+                    .'maps default centre, so 5,610 of 5,611 profiles share one point and no real '
+                    .'listing has anybody within 25 km of it. A further 332 listings have no '
+                    .'coordinates. Both cases reach nobody, and report recipients as 0 rather '
+                    .'than failing.',
+                'requestBody' => self::formBody(['land_id' => 'Required. The listing the notification is about.', 'message_body' => 'Required, up to 5000 characters.', 'notification_sub_category' => 'Optional. An id from notifications/categories.'], ['land_id', 'message_body']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created, with the number of recipients.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => self::broadcastResult()]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/notifications/subscriber-notification' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Post to a listings subscribers',
+                'description' => 'Creates a category 2 notification for the people who subscribed '
+                    .'to that listing. Restricted to the owner or an accepted manager, which is a '
+                    .'change: the previous version checked only that the listing existed, so any '
+                    .'authenticated caller could broadcast to any listings subscribers, who read '
+                    .'these as coming from the property they chose to follow. Refusal is 404, so a '
+                    .'caller learns nothing about a listing they do not manage.',
+                'requestBody' => self::formBody(['land_id' => 'Required. The listing the notification is about.', 'message_body' => 'Required, up to 5000 characters.', 'notification_sub_category' => 'Optional. An id from notifications/categories.'], ['land_id', 'message_body']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created, with the number of recipients.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => self::broadcastResult()]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/notifications/hunting-alert' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Alert hunters whose tags match',
+                'description' => 'Creates a category 3 notification for hunters holding an active '
+                    .'tag in one of the given management units for that species and gender. Not a '
+                    .'proximity alert. When nothing matches, the answer is 409 and nothing is '
+                    .'stored, because an alert nobody can receive is not a draft worth keeping. '
+                    .'Forwarding to PEASI, the provincial alerting service, happens here when it '
+                    .'is configured; previously it happened only through notifications/submit, so '
+                    .'whether an alert was forwarded depended on which endpoint the app called.',
+                'requestBody' => self::formBody([
+                    'land_id' => 'Required.',
+                    'province' => 'Required. Must match the province on the management units.',
+                    'wmus' => 'Required. Management unit numbers, as an array or comma separated.',
+                    'species_id' => 'Required.',
+                    'species_gender' => 'Required.',
+                    'hunters_count' => 'Required, at least 1.',
+                    'message_body' => 'Required, up to 5000 characters.',
+                    'tag_required' => 'Optional. When set, only hunters holding a tag number match.',
+                ], [
+                    'land_id', 'province', 'wmus', 'species_id', 'species_gender',
+                    'hunters_count', 'message_body',
+                ]),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created, with the number of recipients.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => self::broadcastResult()]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing.',
+                    409 => 'No hunters match the criteria; nothing was stored.',
+                    422 => 'Validation failed, or no management unit matched.',
+                ]),
+            ]],
+
+            '/v1/notifications/submit' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Post a notification of any category',
+                'description' => 'The generic entry point, kept because apps in the field use it. '
+                    .'Dispatches on notification_category to the same code as the three endpoints '
+                    .'above: 1 community awareness, 2 subscriber, 3 hunting alert. In the previous '
+                    .'version this was a fourth implementation that behaved differently from all '
+                    .'three — it ignored notification settings entirely, and it was the only path '
+                    .'that forwarded to PEASI. Prefer the specific endpoints.',
+                'requestBody' => self::formBody([
+                    'notification_category' => 'Required. 1, 2 or 3.',
+                    'land_id' => 'Required. The listing the notification is about.', 'message_body' => 'Required, up to 5000 characters.', 'notification_sub_category' => 'Optional. An id from notifications/categories.',
+                ], ['notification_category', 'land_id', 'message_body']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created, with the number of recipients.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => self::broadcastResult()]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    409 => 'A hunting alert that matched no hunters.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/notifications/get-notification' => ['get' => [
+                'tags' => ['Notifications'],
+                'summary' => 'One notification the caller received',
+                'description' => 'Readable only by a recipient. A notification that does not '
+                    .'exist and one sent to somebody else both answer 404, so the existence of a '
+                    .'message is not confirmed to a caller who cannot read it. The fields are an '
+                    .'allowlist; the previous version selected every column of the table. '
+                    .'wmu_list is an array here, where it was the stored JSON string.',
+                'parameters' => [
+                    self::param('notification_id', 'integer', 'The notification to read.', true),
+                ],
+                'responses' => self::ok('The notification, with the callers own read state.', [
+                    'type' => 'object',
+                    'properties' => ['item' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'id' => ['type' => 'integer'],
+                            'notification_category' => ['type' => 'integer'],
+                            'type' => ['type' => 'string', 'description' => 'Category name.'],
+                            'category' => ['type' => 'string', 'nullable' => true, 'description' => 'Sub-category name.'],
+                            'message_body' => ['type' => 'string'],
+                            'sender' => ['type' => 'string', 'nullable' => true],
+                            'sender_id' => ['type' => 'integer'],
+                            'land_id' => ['type' => 'integer', 'nullable' => true],
+                            'land_name' => ['type' => 'string', 'nullable' => true],
+                            'address' => ['type' => 'string', 'nullable' => true],
+                            'coordinates' => ['type' => 'string', 'nullable' => true],
+                            'species_name' => ['type' => 'string', 'nullable' => true],
+                            'species_gender' => ['type' => 'string', 'nullable' => true],
+                            'hunters_count' => ['type' => 'integer', 'nullable' => true],
+                            'tag_required' => ['type' => 'boolean'],
+                            'wmu_list' => ['type' => 'array', 'items' => ['type' => 'string']],
+                            'tag_id' => ['type' => 'integer', 'nullable' => true,
+                                'description' => 'For a hunting alert, which of the callers tags matched.'],
+                            'is_read' => ['type' => 'boolean'],
+                            'is_admin_notification' => ['type' => 'boolean'],
+                            'created' => ['type' => 'string', 'format' => 'date-time'],
+                        ],
+                    ]],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such notification, or it was not sent to you.',
+                    422 => 'notification_id missing.',
+                ]),
+            ]],
+
+            '/v1/notifications/read' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Mark one as read',
+                'description' => 'A POST. The previous version was a GET that wrote, so anything '
+                    .'prefetching a link marked notifications read. Read state belongs to the '
+                    .'recipient, so this changes only the callers own copy.',
+                'requestBody' => self::formBody(
+                    ['notification_id' => 'Required.'],
+                    ['notification_id'],
+                ),
+                'responses' => self::ok('Marked.', [
+                    'type' => 'object',
+                    'properties' => ['read' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such notification, or it was not sent to you.',
+                    422 => 'notification_id missing.',
+                ]),
+            ]],
+
+            '/v1/notifications/delete-notification' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Remove the callers copy',
+                'description' => 'Deletes the callers own copy. The notification itself and every '
+                    .'other recipients copy are untouched.',
+                'requestBody' => self::formBody(
+                    ['notification_id' => 'Required.'],
+                    ['notification_id'],
+                ),
+                'responses' => self::ok('Removed.', [
+                    'type' => 'object',
+                    'properties' => ['deleted' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such notification, or it was not sent to you.',
+                    422 => 'notification_id missing.',
+                ]),
+            ]],
+
+            '/v1/notifications/report-notification' => ['post' => [
+                'tags' => ['Notifications'],
+                'summary' => 'Report a notification to the administrators',
+                'description' => 'Records the report, flags the callers own copy as reported so '
+                    .'the app can show it, and mails the admin address. The previous version left '
+                    .'the flag unset although the column exists for it, so a user could report the '
+                    .'same message repeatedly with no sign it had been done. Mail is sent from the '
+                    .'application with the reporter in Reply-To, not as the reporter.',
+                'requestBody' => self::formBody([
+                    'notification_id' => 'Required.',
+                    'reason' => 'Required, up to 5000 characters.',
+                ], ['notification_id', 'reason']),
+                'responses' => self::ok('Reported.', [
+                    'type' => 'object',
+                    'properties' => ['reported' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such notification, or it was not sent to you.',
+                    422 => 'Validation failed; see errors.',
+                ]),
             ]],
         ];
     }

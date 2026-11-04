@@ -52,6 +52,24 @@ Route::prefix('v1')->group(function () {
     Route::middleware('auth.token')->group(function () {
         Route::get('notifications/list', [NotificationsController::class, 'index']);
         Route::get('notifications/categories', [NotificationsController::class, 'categories']);
+        Route::get('notifications/get-notification', [NotificationsController::class, 'show']);
+
+        /*
+         * Broadcasts. Who receives one is decided by the category, in
+         * App\Services\NotificationBroadcast.
+         *
+         * subscriber-notification is owner-or-manager only; the old endpoint
+         * let any caller post to any property's subscribers, which a
+         * subscriber reads as coming from the property they followed.
+         */
+        Route::post('notifications/submit', [NotificationsController::class, 'submit']);
+        Route::post('notifications/community-awareness', [NotificationsController::class, 'communityAwareness']);
+        Route::post('notifications/subscriber-notification', [NotificationsController::class, 'subscriberNotification']);
+        Route::post('notifications/hunting-alert', [NotificationsController::class, 'huntingAlert']);
+
+        Route::post('notifications/read', [NotificationsController::class, 'markRead']);
+        Route::post('notifications/delete-notification', [NotificationsController::class, 'destroy']);
+        Route::post('notifications/report-notification', [NotificationsController::class, 'report']);
 
         Route::get('listings/all', [ListingsController::class, 'all']);
         Route::get('listings/geofence-listings', [ListingsController::class, 'geofenceListings']);
