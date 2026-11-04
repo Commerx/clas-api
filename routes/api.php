@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\ChatController;
 use App\Http\Controllers\Api\V1\FishingLandsController;
 use App\Http\Controllers\Api\V1\HuntersTagsController;
 use App\Http\Controllers\Api\V1\ListingsController;
+use App\Http\Controllers\Api\V1\ManageListingsController;
 use App\Http\Controllers\Api\V1\NotificationsController;
 use App\Http\Controllers\Api\V1\RequestsController;
 use App\Http\Controllers\Api\V1\SecurityController;
@@ -167,5 +168,43 @@ Route::prefix('v1')->group(function () {
 
         Route::get('fishing-lands/province-regulations', [FishingLandsController::class, 'index']);
         Route::get('fishing-lands/regulations', [FishingLandsController::class, 'show']);
+
+        /*
+         * A listing from its owner's side.
+         *
+         * Every one of these goes through App\Support\V1\ListingAccess:
+         * the old `detail` had no ownership check at all, and the rest
+         * counted a manager invitation that had never been accepted.
+         * add-manager and delete-manager are owner-only, because in the old
+         * API a manager could appoint and remove other managers.
+         *
+         * The signage order and payment endpoints — promocode, add-signages,
+         * update-shipping-cost, update-payment — are group 7.
+         */
+        Route::get('manage-listings/all', [ManageListingsController::class, 'index']);
+        Route::get('manage-listings/detail', [ManageListingsController::class, 'show']);
+        Route::get('manage-listings/availability', [ManageListingsController::class, 'availability']);
+
+        Route::post('manage-listings/add', [ManageListingsController::class, 'store']);
+        Route::post('manage-listings/update-description', [ManageListingsController::class, 'updateDescription']);
+        Route::post('manage-listings/update-location', [ManageListingsController::class, 'updateLocation']);
+        Route::post('manage-listings/update-features-rules', [ManageListingsController::class, 'updateFeaturesRules']);
+        Route::post('manage-listings/update-clas-controls', [ManageListingsController::class, 'updateClasControls']);
+        Route::post('manage-listings/update-signage', [ManageListingsController::class, 'updateSignage']);
+        Route::post('manage-listings/delete-signage', [ManageListingsController::class, 'deleteSignage']);
+        Route::post('manage-listings/update-shipping-info', [ManageListingsController::class, 'updateShippingInfo']);
+
+        Route::post('manage-listings/publish', [ManageListingsController::class, 'publish']);
+        Route::post('manage-listings/unpublish', [ManageListingsController::class, 'unpublish']);
+        Route::post('manage-listings/delete-land', [ManageListingsController::class, 'destroy']);
+
+        Route::post('manage-listings/upload-photos', [ManageListingsController::class, 'uploadPhoto']);
+        Route::post('manage-listings/delete-photos', [ManageListingsController::class, 'deletePhoto']);
+
+        // Inviting somebody sends them mail, so it is rate limited per IP.
+        Route::middleware('throttle:12,1')->group(function () {
+            Route::post('manage-listings/add-manager', [ManageListingsController::class, 'addManager']);
+        });
+        Route::post('manage-listings/delete-manager', [ManageListingsController::class, 'deleteManager']);
     });
 });

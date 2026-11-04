@@ -77,6 +77,33 @@ return [
     ],
 
     /*
+     * Where listing photos live.
+     *
+     * The app is given bare file names and builds its own URLs, so a photo
+     * uploaded through this API has to land where the application serving
+     * those URLs can find it. Today that is the old Yii app's document root,
+     * which this API writes into directly — the two run on the same host.
+     *
+     * This needs settling before the new API moves to its own subdomain: a
+     * shared volume, an object store with a new base URL the app is told
+     * about, or serving photos from this application. Until then the path is
+     * configuration rather than a constant, so moving it is one env change.
+     */
+    'uploads' => [
+        'photos_path' => env('PHOTOS_PATH', 'D:/laragon/www/clas/web/uploads/photos'),
+
+        /* What a photo may be. The old endpoint checked neither. */
+        'photo_max_bytes' => (int) env('PHOTO_MAX_BYTES', 10 * 1024 * 1024),
+        'photo_types' => ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+
+        /* The two derived sizes the app expects beside each original. */
+        'photo_sizes' => [
+            'list_' => [400, 200],
+            'detail_' => [800, 400],
+        ],
+    ],
+
+    /*
      * Coordinates a map centred itself on, which arrive looking like a
      * position but are not one. The first pair is the old web app's default
      * map centre, hardcoded in ten of its views and also the coordinate of

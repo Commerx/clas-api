@@ -47,6 +47,7 @@ class OpenApi
                 ['name' => 'Hunters tags', 'description' => 'The tags a hunting alert matches on'],
                 ['name' => 'Chat', 'description' => 'Saved conversations with the in-app assistant'],
                 ['name' => 'Reference', 'description' => 'Management units, species, seasons and regulations'],
+                ['name' => 'Manage listings', 'description' => 'A listing from its owners side'],
             ],
             'paths' => self::paths(),
         ];
@@ -186,6 +187,81 @@ MD;
                         'description' => 'Null in every row today.'],
                     'regulations_pdf' => ['type' => 'string', 'nullable' => true],
                     'created' => ['type' => 'string', 'format' => 'date-time'],
+                ],
+            ],
+            'ManagedListing' => [
+                'type' => 'object',
+                'description' => 'A listing as its owner or an accepted manager sees it. '
+                    .'Wider than the public view, because the management screens edit fields '
+                    .'the public listing never shows, but still an allowlist: claim_code, '
+                    .'customer_id, order_id and txn_number are not in it for anybody. The old '
+                    .'manage-listings/detail selected land.* and had no ownership check, so it '
+                    .'published the claim code of every listing to any caller with a token.',
+                'properties' => [
+                    'land_id' => ['type' => 'integer'],
+                    'owner' => ['type' => 'integer'],
+                    'land_name' => ['type' => 'string'],
+                    'land_description' => ['type' => 'string', 'nullable' => true],
+                    'land_keywords' => ['type' => 'string', 'nullable' => true],
+                    'address' => ['type' => 'string', 'nullable' => true],
+                    'coordinates' => ['type' => 'string', 'nullable' => true],
+                    'land_lat' => ['type' => 'number', 'nullable' => true],
+                    'land_lng' => ['type' => 'number', 'nullable' => true],
+                    'people_allowed' => ['type' => 'integer'],
+                    'current_step' => ['type' => 'integer', 'nullable' => true],
+                    'status' => ['type' => 'string', 'nullable' => true],
+                    'active' => ['type' => 'string', 'enum' => ['Y', 'N', 'DELETED']],
+                    'visibility_status' => ['type' => 'string', 'nullable' => true],
+                    'payment_status' => ['type' => 'string', 'nullable' => true],
+                    'signage_type' => ['type' => 'integer', 'nullable' => true],
+                    'required_signages' => ['type' => 'integer', 'nullable' => true],
+                    'signage_amount' => ['type' => 'number', 'nullable' => true],
+                    'features_list' => ['type' => 'string', 'nullable' => true,
+                        'description' => 'Rendered HTML, because the old web application reads '
+                            .'this column directly. The free text in it is escaped here; it '
+                            .'was not before.'],
+                    'allowed_activities_text' => ['type' => 'string', 'nullable' => true],
+                    'managers' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/ListingManager']],
+                    'signages' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/ListingSignage']],
+                ],
+            ],
+            'ListingManager' => [
+                'type' => 'object',
+                'properties' => [
+                    'id' => ['type' => 'integer'],
+                    'first_name' => ['type' => 'string'],
+                    'last_name' => ['type' => 'string'],
+                    'user_email' => ['type' => 'string', 'format' => 'email'],
+                    'user_id' => ['type' => 'integer', 'nullable' => true,
+                        'description' => 'The account this invitation resolved to, or null. An '
+                            .'invitation that resolved to nothing cannot be accepted: the web '
+                            .'page that answers it requires the invited account to be signed '
+                            .'in. 4 of the 7 pending invitations are in that state.'],
+                    'status' => ['type' => 'string', 'enum' => ['pending', 'accepted', 'declined']],
+                    'created' => ['type' => 'string', 'format' => 'date-time'],
+                ],
+            ],
+            'ListingSignage' => [
+                'type' => 'object',
+                'properties' => [
+                    'id' => ['type' => 'integer'],
+                    'signage_type' => ['type' => 'integer'],
+                    'qty' => ['type' => 'integer'],
+                    'price' => ['type' => 'number'],
+                    'created_at' => ['type' => 'string', 'format' => 'date-time'],
+                ],
+            ],
+            'ListingPhoto' => [
+                'type' => 'object',
+                'properties' => [
+                    'photo_id' => ['type' => 'integer'],
+                    'land_id' => ['type' => 'integer'],
+                    'photo_name' => ['type' => 'string',
+                        'description' => 'The file name. The app builds its own URL from it, '
+                            .'and the list_ and detail_ sizes sit beside it under the same name.'],
+                    'is_titlephoto' => ['type' => 'string', 'enum' => ['Y', 'N']],
+                    'size' => ['type' => 'integer'],
+                    'type' => ['type' => 'string'],
                 ],
             ],
             'Feature' => [
@@ -2041,6 +2117,442 @@ MD;
                     401 => 'Missing, unknown or mismatched token.',
                     404 => 'No regulations for that province.',
                     422 => 'province missing.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/all' => ['get' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Listings the caller owns or manages',
+                'description' => 'Active and inactive both, because an owner still has to find '
+                    .'a listing they have taken down. Imported grazing-lease rows are excluded, '
+                    .'as before: those are nobodys to manage. A manager appears here only once '
+                    .'their invitation has been accepted — the old query counted any row in '
+                    .'land_managers, pending included.',
+                'responses' => self::ok('The listings, newest first.', [
+                    'type' => 'object',
+                    'properties' => ['items' => ['type' => 'array',
+                        'items' => ['$ref' => '#/components/schemas/ManagedListing']]],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/manage-listings/detail' => ['get' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'One listing in full, with photos, managers and signage',
+                'description' => 'This is the endpoint that had no ownership check at all: it '
+                    .'took a land id, selected land.*, and answered for any listing owned by '
+                    .'anyone, publishing claim_code — the secret that lets whoever holds it '
+                    .'take ownership — along with the payment identifiers and the supersede '
+                    .'email addresses. A listing the caller does not manage now answers 404, '
+                    .'the same as one that does not exist.',
+                'parameters' => [self::param('id', 'integer', 'The listing.', true)],
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['allOf' => [
+                        ['$ref' => '#/components/schemas/ManagedListing'],
+                        ['type' => 'object', 'properties' => [
+                            'photos' => ['type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/ListingPhoto']],
+                            'is_subscribed' => ['type' => 'boolean'],
+                        ]],
+                    ]]],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/availability' => ['get' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Blocked days, and how full the rest are',
+                'description' => 'percent_filled buckets each requested day to 25, 50, 75 or '
+                    .'100 against people_allowed. The old version divided by people_allowed '
+                    .'without checking it, and a listing created through add starts at 0, so '
+                    .'the first request against a listing whose limit was never set divided by '
+                    .'zero. A limit of zero now reports every requested day as full.',
+                'parameters' => [self::param('id', 'integer', 'The listing.', true)],
+                'responses' => self::ok('Availability.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'blocked' => ['type' => 'array', 'items' => ['type' => 'string', 'format' => 'date']],
+                        'percent_filled' => ['type' => 'object',
+                            'additionalProperties' => ['type' => 'string', 'enum' => ['25', '50', '75', '100']],
+                            'description' => 'Keyed by date.'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/add' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Start a listing',
+                'description' => 'The caller becomes the owner. visibility_status is only '
+                    .'honoured for an account holding a dark mode subscription, as before.',
+                'requestBody' => self::formBody([
+                    'land_name' => 'Required.',
+                    'land_description' => 'Required.',
+                    'land_keywords' => 'Optional.',
+                    'visibility_status' => 'Optional: public, private or inactive. Dark mode only.',
+                ], ['land_name', 'land_description']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-description' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Name, keywords and description',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'land_name' => 'Required.',
+                    'land_description' => 'Required.',
+                    'land_keywords' => 'Optional.',
+                    'visibility_status' => 'Optional, dark mode only.',
+                ], ['id', 'land_name', 'land_description']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-location' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Address, coordinates and boundary',
+                'description' => 'A KML boundary and a drawn one are alternatives: sending '
+                    .'kml_data clears the drawn area and points, as before. Coordinates must '
+                    .'parse as a latitude and longitude pair — the old version split the string '
+                    .'and assigned the halves without checking, so a malformed value wrote '
+                    .'nonsense into land_lat and land_lng.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'address' => 'Required.',
+                    'coordinates' => 'Required. "lat,lng".',
+                    'geofencing' => 'Optional: Yes or No.',
+                    'total_deeded' => 'Optional, numeric.',
+                    'area' => 'Optional. The drawn boundary.',
+                    'points' => 'Optional. The drawn points.',
+                    'kml_data' => 'Optional. Replaces area and points.',
+                ], ['id', 'address', 'coordinates']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-features-rules' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Property features and activity rules',
+                'description' => 'Writes both the selection and the rendered HTML the old web '
+                    .'application reads from features_list and allowed_activities_text. The '
+                    .'free text an owner types into an "other" feature or the extra rules box '
+                    .'is escaped before it reaches that markup; it was not before, and the '
+                    .'admin listing view and two mail templates render those columns raw.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'key_features' => 'Required. The selection map, as the features screen posts it.',
+                    'allowed_activities' => 'Optional. Rule answers, plus any free text.',
+                ], ['id', 'key_features']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-clas-controls' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Party size, auto-approval and guides',
+                'description' => 'The supersede addresses receive a copy of every request for '
+                    .'the listing, so they are now checked as email addresses; the old endpoint '
+                    .'stored whatever was sent.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'people_allowed' => 'Required, 0 or more.',
+                    'auto_approve_requests' => 'Optional: Yes or No.',
+                    'allow_unlimited_access' => 'Optional: Yes or No.',
+                    'allow_guide' => 'Optional: Yes or No.',
+                    'guide_number_1' => 'Optional.',
+                    'guide_1_auto_approval' => 'Optional: Yes or No.',
+                    'guide_number_2' => 'Optional.',
+                    'guide_2_auto_approval' => 'Optional: Yes or No.',
+                    'guide_number_3' => 'Optional.',
+                    'guide_3_auto_approval' => 'Optional: Yes or No.',
+                    'supersede_emails_1' => 'Optional, a valid address.',
+                    'supersede_emails_2' => 'Optional, a valid address.',
+                ], ['id', 'people_allowed']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-signage' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Geofence or physical signs',
+                'description' => 'Type 1 is the geofence, which costs nothing, so it marks the '
+                    .'listing paid and turns geofencing on. Type 2 means signs. Note that '
+                    .'switching back to type 1 marks the listing paid and clears the promocode, '
+                    .'discount and shipping method while leaving any signage lines and amounts '
+                    .'in place, exactly as the old endpoint did — a listing can end up marked '
+                    .'paid with an unpaid sign order attached, and settling that belongs with '
+                    .'the payment work.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'signage_type' => 'Required: 1 geofence, 2 signs.',
+                ], ['id', 'signage_type']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/delete-signage' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Remove a signage line',
+                'description' => 'Removes one line and restates the quantity and amount from '
+                    .'what is left, inside a transaction.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'signage_id' => 'Required. A line on that listing.',
+                ], ['id', 'signage_id']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-shipping-info' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Where signs should be sent',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'street' => 'Required.',
+                    'city' => 'Required.',
+                    'province' => 'Required.',
+                    'country' => 'Required.',
+                    'postal_code' => 'Required.',
+                    'phone' => 'Optional.',
+                ], ['id', 'street', 'city', 'province', 'country', 'postal_code']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/publish' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Make a listing visible',
+                'description' => 'Only a paid listing that is not already live can be '
+                    .'published. The old endpoint answered the same "Invalid Request!" for both '
+                    .'of those, so an owner could not tell an unpaid listing from one already '
+                    .'published; they are now separate 409s.',
+                'requestBody' => self::formBody(['id' => 'Required. A listing you manage.'], ['id']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    409 => 'Not paid for yet, or already published.',
+                    422 => 'id missing.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/unpublish' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Take a listing down',
+                'requestBody' => self::formBody(['id' => 'Required. A listing you manage.'], ['id']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/delete-land' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Delete a listing',
+                'description' => 'Owner only, as before — a manager cannot delete somebody '
+                    .'elses property. The row is marked rather than removed, so the requests '
+                    .'and bookings against it keep their reference.',
+                'requestBody' => self::formBody(['id' => 'Required. A listing you own.'], ['id']),
+                'responses' => self::ok('Deleted.', [
+                    'type' => 'object',
+                    'properties' => ['deleted' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you are not its owner.',
+                    422 => 'id missing.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/upload-photos' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Add a photo',
+                'description' => 'multipart/form-data. The upload must be a real JPEG, PNG, GIF '
+                    .'or WebP within the size limit, and the stored extension comes from what '
+                    .'the bytes are rather than from the file name. The old endpoint took the '
+                    .'extension straight from the client name and wrote the file into a '
+                    .'web-served directory before anything looked at the contents, so a caller '
+                    .'chose the extension of a file placed under the document root. The first '
+                    .'photo on a listing becomes its title photo.',
+                'requestBody' => [
+                    'required' => true,
+                    'content' => ['multipart/form-data' => ['schema' => [
+                        'type' => 'object',
+                        'required' => ['id', 'image'],
+                        'properties' => [
+                            'id' => ['type' => 'integer', 'description' => 'A listing you manage.'],
+                            'image' => ['type' => 'string', 'format' => 'binary'],
+                        ],
+                    ]]],
+                ],
+                'responses' => [
+                    '201' => [
+                        'description' => 'Stored.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => ['item' => ['$ref' => '#/components/schemas/ListingPhoto']],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'No file, or not an image this API accepts.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/delete-photos' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Remove a photo',
+                'description' => 'The row goes whether or not the file is still on disk; the '
+                    .'old endpoint refused when the original was missing, so a row left behind '
+                    .'by a failed upload could not be cleared through the API at all. If the '
+                    .'title photo is the one removed, the next photo becomes the title.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'photo_id' => 'Required. A photo on that listing.',
+                ], ['id', 'photo_id']),
+                'responses' => self::ok('Removed.', [
+                    'type' => 'object',
+                    'properties' => ['deleted' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/add-manager' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Invite somebody to manage the listing',
+                'description' => 'Owner only. In the old API this was owner-or-manager with no '
+                    .'check on the invitation status, so anybody who had been invited — '
+                    .'accepted or not — could appoint further managers to a property that was '
+                    .'not theirs. Sends mail, so it is rate limited per IP. The invitation is '
+                    .'answered in the web application, which requires the invited person to be '
+                    .'signed in as the account it names.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you own.',
+                    'first_name' => 'Required.',
+                    'last_name' => 'Required.',
+                    'user_email' => 'Required, a valid address.',
+                ], ['id', 'first_name', 'last_name', 'user_email']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Invited.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'id' => ['type' => 'integer'],
+                                        'managers' => ['type' => 'array',
+                                            'items' => ['$ref' => '#/components/schemas/ListingManager']],
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you are not its owner.',
+                    409 => 'That person has already been invited.',
+                    422 => 'Validation failed; see errors.',
+                    429 => 'Too many invitations from this address.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/delete-manager' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Withdraw an invitation or remove a manager',
+                'description' => 'Owner only, for the same reason as add-manager: in the old '
+                    .'API one manager could remove another.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you own.',
+                    'manager_id' => 'Required. A manager on that listing.',
+                ], ['id', 'manager_id']),
+                'responses' => self::ok('Removed.', [
+                    'type' => 'object',
+                    'properties' => ['managers' => ['type' => 'array',
+                        'items' => ['$ref' => '#/components/schemas/ListingManager']]],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing or manager, or you are not its owner.',
+                    422 => 'Validation failed; see errors.',
                 ]),
             ]],
         ];

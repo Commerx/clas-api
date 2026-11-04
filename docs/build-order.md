@@ -45,7 +45,7 @@ written.
 | 3 | User, UserSettings, Security | 14 | onboarding | **done** |
 | 4 | Notifications remainder | 8 | — | **done** |
 | 5 | HuntersTags, Chat, Wmu, FishingLands | 15 | — | **done** |
-| 6 | ManageListings, non-payment | 18 | — | largest controller |
+| 6 | ManageListings, non-payment | 18 | — | **done** |
 | 7 | Payments | 10 | Stripe decision | do not port Moneris |
 | — | MarketplaceOrders | 2 | — | **skip: retired** |
 
@@ -233,18 +233,116 @@ takes the unit *number* in a parameter called `id` while this one calls its
 parameter `wmu_id`, and which identifier the app actually sends here cannot be
 settled from the data. Filtering on a guess would silently return nothing.
 
-### 6. ManageListings
+### 6. ManageListings — DONE
 
+All 18 non-payment endpoints. The old controller has 22 actions; promocode,
+add-signages, update-shipping-cost and update-payment move money or discounts
+and stay with group 7.
+
+Three things carried most of the work:
+
+- **`detail` had no access check at all.** It took a land id, selected
+  `land.*`, and answered for any listing owned by anyone, to any caller with a
+  valid token. That published `claim_code` — the secret that lets whoever
+  presents it take ownership of a listing, set on 6,131 rows — along with the
+  payment identifiers and the supersede email addresses. Every endpoint here
+  now goes through `App\Support\V1\ListingAccess`, and a listing the caller
+  does not manage answers 404.
+- **A manager could appoint and remove managers.** Access throughout the old
+  controller was `owner OR any land_managers row`, with no check on the
+  invitation's status, so somebody invited and never accepted could add
+  further managers to a property that was not theirs and remove the ones who
+  were. add-manager and delete-manager are owner-only here; the rest stay
+  owner-or-manager, but only an accepted manager counts.
+- **Every write answered with the whole row**, so each of them leaked what
+  `detail` leaked. `App\Support\V1\ManagedListingRow` is the allowlist and
+  every response here is built from it.
+
+### The photo upload
+
+This is the most serious thing found so far, and it is worth stating on its
+own. The old endpoint did:
+
+```php
+$image = UploadedFile::getInstanceByName('image');
+$imageName = Yii::$app->security->generateRandomString() . '.' . $image->getExtension();
+$image->saveAs($uploadPath . '/' . $imageName);
 ```
-Port manage-listings read endpoints: all, detail, listing data — 8h
-Port listing create and update, including the multi-step draft flow — 14h
-Port listing publish, unpublish and status changes — 6h
-Port the photo and KML upload endpoints — 8h
-Port manage-listings availability and blocked-day management — 8h
-Port the land manager invite and acceptance endpoints — 6h
-Port the remaining ManageListings endpoints — 10h
-Contract tests and OpenAPI entries for ManageListings — 6h
-```
+
+`getExtension()` reads the *client's* filename. `$uploadPath` is under the web
+document root. Nothing looked at the file's contents first, and the thumbnail
+step that would have failed on a non-image runs afterwards, so its failure
+does not remove what was already written.
+
+Verified against the running old API on 2026-11-04: a text file posted as
+`probe.txt` was written to `web/uploads/photos/19133/<random>.txt` and served
+at that URL with HTTP 200. The probe file and its row were removed afterwards.
+The `.htaccess` in `web/` has no restriction on `uploads/`, and the rewrite
+rules serve any file that exists directly. On a host where PHP is handled
+across the document root — the normal configuration, and this one — that is
+**remote code execution for any caller who owns or manages a listing**, and
+in the old API a never-accepted manager invitation was enough.
+
+There was also no null check on the upload, so a request with no `image` part
+reached `$image->getExtension()` on null.
+
+In v1, `App\Services\ListingPhotos` requires a real JPEG, PNG, GIF or WebP
+within a size limit, takes the extension from what the bytes are rather than
+from the name, and writes nothing until all of that holds.
+
+**This needs your decision, not just a port:** the old endpoint is live, and
+the standing rule is that the old code is not changed before the cutover.
+Options are to accept it for the overlap window, to block `.php` under
+`uploads/` in the web server configuration (a one-line `.htaccess` change
+rather than a code change), or to fix the old endpoint. `docs/` has no
+separate note for it; this is the record.
+
+### Smaller things in this group
+
+- **Stored XSS through the feature list.** `features_list` and
+  `allowed_activities_text` hold rendered HTML, built by interpolating the
+  owner's own free text — the "other" feature box and the extra-rules box —
+  with no escaping. `views/admin/listings/view.php` does
+  `echo $model->features_list`, and two mail templates do the same, so that
+  text ran in an administrator's browser and in the property notification
+  emails. v1 escapes it on write, which also fixes those pages, since what
+  they render is what this writes.
+- **`availability` divided by `people_allowed`** without checking it, and a
+  listing created through `add` starts at 0. A limit of zero now reports
+  every requested day as full.
+- **`publish` answered the same error for two different refusals** — not paid
+  for, and already published — so an owner could not tell them apart.
+- **`delete-photos` refused when the file was missing from disk**, so a row
+  left behind by a failed upload could not be cleared through the API at all.
+  It also left a listing with no title photo when the title photo was the one
+  removed.
+- **`update-location` split the coordinate string and assigned the halves**
+  without checking them, so a malformed value wrote nonsense into `land_lat`
+  and `land_lng`.
+- **The supersede addresses were never validated**, though every request for
+  the listing is copied to them.
+- **`add-manager` sends mail to any address the caller names** and had no
+  rate limit; it is throttled per IP here.
+
+### Two things this group leaves open
+
+**Where photos live.** The app is given bare file names and builds its own
+URLs, so a photo uploaded through this API has to land where the application
+serving those URLs can find it. Today that is the old Yii app's document root,
+which this API writes into directly because both run on the same host. Before
+the new API moves to its own subdomain this needs settling: a shared volume,
+an object store with a new base URL the app is told about, or serving photos
+from this application. The path is `clas.uploads.photos_path`, so moving it is
+one environment change.
+
+**Manager invitations to people with no account.** The invitation is answered
+in the web application, which requires the invited person to be signed in as
+the account the invitation names. That account is resolved when the
+invitation is sent, so an invitation to an address with no account yet can
+never be answered, even after they sign up. 4 of the 7 pending invitations are
+in that state. Closing it needs an acceptance endpoint in this API that
+resolves the account at acceptance time instead — about 4h, and it needs the
+app to handle the link.
 
 ### 7. Payments — after the Stripe decision
 
@@ -271,6 +369,9 @@ Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
 Supply an FCM service account so push can be delivered at all — 3h
 Decide what to do about profile positions — see docs/profile-positions.md — 4h
+Decide where listing photos live once the API moves to its own subdomain — 4h
+Decide whether the old upload endpoint is blocked before the cutover — 1h
+Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 ```
 
 ## Totals
@@ -282,26 +383,27 @@ Decide what to do about profile positions — see docs/profile-positions.md — 
 | 3. User, settings, security | 0 |
 | 4. Notifications | 0 |
 | 5. Self-contained features | 0 |
-| 6. ManageListings | 66 |
+| 6. ManageListings | 0 |
 | 7. Payments | 60 |
-| Cross-cutting | 27 |
-| **Total** | **153** |
+| Cross-cutting | 36 |
+| **Total** | **96** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest
 has moved, since both read the same database.
 
-Excluding payments and cross-cutting: **66 hours** to finish every endpoint
-the new app needs apart from paying for things.
+Excluding payments and cross-cutting: **0 hours** — every endpoint the new
+app needs apart from paying for things is built. What is left is the
+payment group and the cross-cutting work.
 
 ## What is already done
 
-**69 endpoints.** Token middleware, all thirteen Listings endpoints, all
+**87 endpoints.** Token middleware, all thirteen Listings endpoints, all
 sixteen Requests endpoints, all ten Notifications endpoints, the fourteen in
-the user, settings and security group, and the fifteen in hunters tags, chat
-and reference data.
+the user, settings and security group, the fifteen in hunters tags, chat and
+reference data, and the eighteen non-payment ManageListings endpoints.
 
-Interactive documentation at `/docs` covers every one of them, with 147 tests
+Interactive documentation at `/docs` covers every one of them, with 161 tests
 and seven enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 
