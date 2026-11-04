@@ -44,6 +44,9 @@ class OpenApi
                 ['name' => 'Listings', 'description' => 'Land listings, availability and daylight'],
                 ['name' => 'Requests', 'description' => 'Access requests and bookings'],
                 ['name' => 'Notifications', 'description' => 'User notifications'],
+                ['name' => 'Hunters tags', 'description' => 'The tags a hunting alert matches on'],
+                ['name' => 'Chat', 'description' => 'Saved conversations with the in-app assistant'],
+                ['name' => 'Reference', 'description' => 'Management units, species, seasons and regulations'],
             ],
             'paths' => self::paths(),
         ];
@@ -142,6 +145,47 @@ MD;
                             ],
                         ],
                     ],
+                ],
+            ],
+            'Tag' => [
+                'type' => 'object',
+                'description' => 'A hunters tag: what a hunting alert matches on.',
+                'properties' => [
+                    'id' => ['type' => 'integer'],
+                    'tag_number' => ['type' => 'integer', 'nullable' => true,
+                        'description' => 'Null when the tag was filed with tag_required false.'],
+                    'wildlife_id_number' => ['type' => 'integer', 'nullable' => true],
+                    'season_start_date' => ['type' => 'string', 'format' => 'date', 'nullable' => true],
+                    'season_end_date' => ['type' => 'string', 'format' => 'date', 'nullable' => true,
+                        'description' => 'Null never expires; a date in the past excludes the '
+                            .'tag from alert matching whatever status says.'],
+                    'species_id' => ['type' => 'integer'],
+                    'species_gender' => ['type' => 'string', 'nullable' => true],
+                    'province' => ['type' => 'string', 'nullable' => true],
+                    'status' => ['type' => 'string', 'enum' => ['Active', 'Expired', 'Used']],
+                    'created' => ['type' => 'string', 'format' => 'date-time'],
+                    'updated' => ['type' => 'string', 'format' => 'date-time', 'nullable' => true],
+                ],
+            ],
+            'ManagementUnit' => [
+                'type' => 'object',
+                'properties' => [
+                    'wmu_id' => ['type' => 'integer'],
+                    'province' => ['type' => 'string', 'nullable' => true],
+                    'wmu_number' => ['type' => 'string', 'nullable' => true,
+                        'description' => 'Not unique on its own: numbers repeat across provinces.'],
+                    'wmu_name' => ['type' => 'string', 'nullable' => true],
+                ],
+            ],
+            'FishingRegulations' => [
+                'type' => 'object',
+                'properties' => [
+                    'id' => ['type' => 'integer'],
+                    'province' => ['type' => 'string', 'nullable' => true],
+                    'region' => ['type' => 'string', 'nullable' => true,
+                        'description' => 'Null in every row today.'],
+                    'regulations_pdf' => ['type' => 'string', 'nullable' => true],
+                    'created' => ['type' => 'string', 'format' => 'date-time'],
                 ],
             ],
             'Feature' => [
@@ -1635,6 +1679,368 @@ MD;
                     401 => 'Missing, unknown or mismatched token.',
                     404 => 'No such notification, or it was not sent to you.',
                     422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/hunters-tags/get-all-tags' => ['get' => [
+                'tags' => ['Hunters tags'],
+                'summary' => 'The callers tags',
+                'description' => 'Marks the callers own tags expired when their season has '
+                    .'passed, then lists them. The old endpoint swept the whole table rather '
+                    .'than one account, so one hunter opening this screen rewrote every other '
+                    .'hunters tags; alert matching no longer depends on the sweep having run.',
+                'responses' => self::ok('The tags, newest first.',
+                    self::itemsOf('#/components/schemas/Tag'))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/hunters-tags/get-tag' => ['get' => [
+                'tags' => ['Hunters tags'],
+                'summary' => 'One tag, with its management units',
+                'description' => 'Readable only by the hunter who filed it. A tag belonging to '
+                    .'somebody else and one that does not exist both answer 404.',
+                'parameters' => [self::param('tag_id', 'integer', 'The tag to read.', true)],
+                'responses' => self::ok('The tag.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['allOf' => [
+                        ['$ref' => '#/components/schemas/Tag'],
+                        ['type' => 'object', 'properties' => ['wmus' => [
+                            'type' => 'array',
+                            'items' => ['type' => 'string'],
+                            'description' => 'The unit numbers this tag covers.',
+                        ]]],
+                    ]]],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such tag, or it is not yours.',
+                    422 => 'tag_id missing.',
+                ]),
+            ]],
+
+            '/v1/hunters-tags/add-tag' => ['post' => [
+                'tags' => ['Hunters tags'],
+                'summary' => 'File a tag',
+                'description' => 'Creates a tag for the caller and records the units it covers. '
+                    .'Two changes from the old endpoint, both about the units: they are resolved '
+                    .'by province and number together, where the old one resolved by number '
+                    .'alone and so could file a Saskatchewan tag against Manitobas unit of the '
+                    .'same number; and a number that does not exist is now a validation failure. '
+                    .'The old endpoint inserted the unknown number into the reference table, '
+                    .'which is how 58 units came to have no province at all. The tag and its '
+                    .'units are written in one transaction.',
+                'requestBody' => self::formBody(['tag_required' => 'Optional, default true. When false the physical tag details are not required.', 'tag_number' => 'Required unless tag_required is false. Integer.', 'wildlife_id_number' => 'Required unless tag_required is false. Integer.', 'season_start_date' => 'Required unless tag_required is false. YYYY-MM-DD.', 'season_end_date' => 'Required unless tag_required is false. YYYY-MM-DD, not before the start.', 'species_id' => 'Required. Must exist; see wmu/species.', 'species_gender' => 'Required.', 'province' => 'Required. Must be the province the units are in.', 'wmus' => 'Required. Unit numbers, as an array or comma separated. Every one must exist in that province.', 'status' => 'Required. Active, Expired or Used.'], ['species_id', 'species_gender', 'province', 'wmus', 'status']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Created.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => ['id' => ['type' => 'integer']],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed, or a unit does not exist in that province.',
+                ]),
+            ]],
+
+            '/v1/hunters-tags/update-tag' => ['post' => [
+                'tags' => ['Hunters tags'],
+                'summary' => 'Replace a tag',
+                'description' => 'Replaces one of the callers tags and the units it covers. The '
+                    .'units are rebuilt inside a transaction; the old version deleted and '
+                    .'reinserted them with no transaction, so a failure part way through left a '
+                    .'tag covering some of the units asked for and none of the rest.',
+                'requestBody' => self::formBody(
+                    ['tag_id' => 'Required. One of your own tags.', 'tag_required' => 'Optional, default true. When false the physical tag details are not required.', 'tag_number' => 'Required unless tag_required is false. Integer.', 'wildlife_id_number' => 'Required unless tag_required is false. Integer.', 'season_start_date' => 'Required unless tag_required is false. YYYY-MM-DD.', 'season_end_date' => 'Required unless tag_required is false. YYYY-MM-DD, not before the start.', 'species_id' => 'Required. Must exist; see wmu/species.', 'species_gender' => 'Required.', 'province' => 'Required. Must be the province the units are in.', 'wmus' => 'Required. Unit numbers, as an array or comma separated. Every one must exist in that province.', 'status' => 'Required. Active, Expired or Used.'],
+                    array_merge(['tag_id'], ['species_id', 'species_gender', 'province', 'wmus', 'status']),
+                ),
+                'responses' => self::ok('Updated.', [
+                    'type' => 'object',
+                    'properties' => ['id' => ['type' => 'integer']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such tag, or it is not yours.',
+                    422 => 'Validation failed, or a unit does not exist in that province.',
+                ]),
+            ]],
+
+            '/v1/hunters-tags/delete-tag' => ['post' => [
+                'tags' => ['Hunters tags'],
+                'summary' => 'Remove a tag',
+                'description' => 'Deletes one of the callers tags and the units it covered, in '
+                    .'one transaction.',
+                'requestBody' => self::formBody(
+                    ['tag_id' => 'Required. One of your own tags.'],
+                    ['tag_id'],
+                ),
+                'responses' => self::ok('Removed.', [
+                    'type' => 'object',
+                    'properties' => ['deleted' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such tag, or it is not yours.',
+                    422 => 'tag_id missing.',
+                ]),
+            ]],
+
+            '/v1/chat/list' => ['get' => [
+                'tags' => ['Chat'],
+                'summary' => 'The callers conversations',
+                'description' => 'Titles and timestamps, most recently updated first. The '
+                    .'history itself is not included; read one with chat/get-history. The old '
+                    .'endpoint accepted start and limit and ignored both, so they are not here.',
+                'responses' => self::ok('The conversations.', [
+                    'type' => 'object',
+                    'properties' => ['items' => [
+                        'type' => 'array',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'id' => ['type' => 'integer'],
+                                'chat_title' => ['type' => 'string'],
+                                'created' => ['type' => 'string', 'format' => 'date-time'],
+                                'updated' => ['type' => 'string', 'format' => 'date-time', 'nullable' => true],
+                            ],
+                        ],
+                    ]],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/chat/get-history' => ['get' => [
+                'tags' => ['Chat'],
+                'summary' => 'One conversation',
+                'description' => 'Readable only by the account that saved it. The history comes '
+                    .'back decoded, which means it mirrors what was posted: history sent as a '
+                    .'JSON string reads back as a string, history sent as a form array reads '
+                    .'back as an object. That is how the old API stored it and existing rows '
+                    .'depend on it.',
+                'parameters' => [self::param('chat_id', 'integer', 'The conversation to read.', true)],
+                'responses' => self::ok('The conversation.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'id' => ['type' => 'integer'],
+                        'chat_title' => ['type' => 'string'],
+                        'history' => ['description' => 'Whatever was stored; see above.'],
+                        'created' => ['type' => 'string', 'format' => 'date-time'],
+                        'updated' => ['type' => 'string', 'format' => 'date-time', 'nullable' => true],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such conversation, or it is not yours.',
+                    422 => 'chat_id missing.',
+                ]),
+            ]],
+
+            '/v1/chat/add-history' => ['post' => [
+                'tags' => ['Chat'],
+                'summary' => 'Save a new conversation',
+                'description' => 'The question becomes the title. History is capped at a '
+                    .'megabyte, which the old endpoint did not limit at all.',
+                'requestBody' => self::formBody([
+                    'question' => 'Required, up to 1000 characters. Becomes the title.',
+                    'history' => 'Required. Stored as sent; see chat/get-history.',
+                ], ['question', 'history']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Saved.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => ['id' => ['type' => 'integer']],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed, or the history is too large.',
+                ]),
+            ]],
+
+            '/v1/chat/update-history' => ['post' => [
+                'tags' => ['Chat'],
+                'summary' => 'Replace a conversations history',
+                'description' => 'Replaces the history of one of the callers conversations and '
+                    .'sets its updated time, which chat/list orders by.',
+                'requestBody' => self::formBody([
+                    'chat_id' => 'Required. One of your own conversations.',
+                    'history' => 'Required. Stored as sent; see chat/get-history.',
+                ], ['chat_id', 'history']),
+                'responses' => self::ok('Updated.', [
+                    'type' => 'object',
+                    'properties' => ['id' => ['type' => 'integer']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such conversation, or it is not yours.',
+                    422 => 'Validation failed, or the history is too large.',
+                ]),
+            ]],
+
+            '/v1/chat/delete-history' => ['post' => [
+                'tags' => ['Chat'],
+                'summary' => 'Delete a conversation',
+                'requestBody' => self::formBody(
+                    ['chat_id' => 'Required. One of your own conversations.'],
+                    ['chat_id'],
+                ),
+                'responses' => self::ok('Deleted.', [
+                    'type' => 'object',
+                    'properties' => ['deleted' => ['type' => 'boolean']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such conversation, or it is not yours.',
+                    422 => 'chat_id missing.',
+                ]),
+            ]],
+
+            '/v1/wmu/games' => ['get' => [
+                'tags' => ['Reference'],
+                'summary' => 'One management unit and the games in it',
+                'description' => 'The id parameter is the unit number, not wmu_id: the old '
+                    .'endpoint named it that way and the app sends it, so the name is kept. Unit '
+                    .'numbers repeat across provinces — 3 exists in six of them — which is why '
+                    .'the province is required. The games list is distinct here; the old one '
+                    .'appended a games row per game detail, so a unit with two details for the '
+                    .'same game listed it twice.',
+                'parameters' => [
+                    self::param('id', 'string', 'The unit number, for example 3 or 69A-2.', true),
+                    self::param('province', 'string', 'The province that unit is in.', true),
+                ],
+                'responses' => self::ok('The unit, its game details and its games.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'wmu' => ['$ref' => '#/components/schemas/ManagementUnit'],
+                        'game_details' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'game_detail_id' => ['type' => 'integer'],
+                                    'wmu_id' => ['type' => 'integer'],
+                                    'game_id' => ['type' => 'integer'],
+                                ],
+                            ],
+                        ],
+                        'games' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'game_id' => ['type' => 'integer'],
+                                    'game_name' => ['type' => 'string', 'nullable' => true],
+                                    'province' => ['type' => 'string', 'nullable' => true],
+                                    'regulations_pdf' => ['type' => 'string', 'nullable' => true],
+                                ],
+                            ],
+                        ],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such unit in that province.',
+                    422 => 'id or province missing.',
+                ]),
+            ]],
+
+            '/v1/wmu/game-season-details' => ['get' => [
+                'tags' => ['Reference'],
+                'summary' => 'The seasons for one game detail',
+                'description' => 'Seasons live in a table per province, so the province decides '
+                    .'which table is read and only the nine provinces that have one are '
+                    .'accepted: ab, bc, mb, nb, ns, on, pe, sk, yk. NL, NT, NU and QC have no '
+                    .'season table. wmu_id is required because the app sends it and is not used '
+                    .'as a filter, exactly as before — a game detail already belongs to one '
+                    .'unit, and whether the app sends a wmu_id or a unit number here cannot be '
+                    .'settled from the data, so filtering on a guess would silently return '
+                    .'nothing.',
+                'parameters' => [
+                    self::param('wmu_id', 'string', 'Required, and not used as a filter.', true),
+                    self::param('game_detail_id', 'integer', 'The game detail to read.', true),
+                    self::param('province', 'string', 'One of the nine with a season table.', true),
+                ],
+                'responses' => self::ok('The seasons.', [
+                    'type' => 'object',
+                    'properties' => ['items' => [
+                        'type' => 'array',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'species_name' => ['type' => 'string', 'nullable' => true,
+                                    'description' => 'Whitespace collapsed; 13 of the stored '
+                                        .'names hold a carriage return and newline.'],
+                                'season_id' => ['type' => 'integer'],
+                                'game_detail_id' => ['type' => 'integer'],
+                                'species_id' => ['type' => 'integer'],
+                                'type' => ['type' => 'string', 'nullable' => true],
+                                'season' => ['type' => 'string', 'nullable' => true],
+                                'bag_limit' => ['type' => 'string', 'nullable' => true],
+                                'daily_limit' => ['type' => 'string', 'nullable' => true],
+                                'posession_limit' => ['type' => 'string', 'nullable' => true,
+                                    'description' => 'Spelled as the column is.'],
+                                'day_restrictions' => ['type' => 'string', 'nullable' => true],
+                                'notes' => ['type' => 'string', 'nullable' => true],
+                                'alerts' => ['type' => 'string', 'nullable' => true],
+                                'season_start_date' => ['type' => 'string', 'format' => 'date', 'nullable' => true],
+                                'season_end_date' => ['type' => 'string', 'format' => 'date', 'nullable' => true],
+                            ],
+                        ],
+                    ]],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed, or that province has no season table.',
+                ]),
+            ]],
+
+            '/v1/wmu/species' => ['get' => [
+                'tags' => ['Reference'],
+                'summary' => 'Every species',
+                'description' => 'For the pickers, and for the species_id a tag or a hunting '
+                    .'alert carries. Names have their whitespace collapsed.',
+                'responses' => self::ok('The species.', [
+                    'type' => 'object',
+                    'properties' => ['items' => [
+                        'type' => 'array',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'species_id' => ['type' => 'integer'],
+                                'species_name' => ['type' => 'string', 'nullable' => true],
+                            ],
+                        ],
+                    ]],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/fishing-lands/province-regulations' => ['get' => [
+                'tags' => ['Reference'],
+                'summary' => 'Fishing regulations for every province',
+                'description' => 'One document per province, thirteen rows. The region column '
+                    .'exists for a province needing more than one and is null in every row.',
+                'responses' => self::ok('The regulations.',
+                    self::itemsOf('#/components/schemas/FishingRegulations'))
+                    + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/fishing-lands/regulations' => ['get' => [
+                'tags' => ['Reference'],
+                'summary' => 'Fishing regulations for one province',
+                'description' => 'The old endpoint defaulted the province to AB while also '
+                    .'marking it required, so the default was unreachable; it is simply required '
+                    .'here. Note that this table spells Yukon YT where the season tables use yk.',
+                'parameters' => [self::param('province', 'string', 'For example AB.', true)],
+                'responses' => self::ok('The regulations.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/FishingRegulations']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No regulations for that province.',
+                    422 => 'province missing.',
                 ]),
             ]],
         ];

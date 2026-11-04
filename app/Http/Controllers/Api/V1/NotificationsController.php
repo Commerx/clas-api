@@ -10,6 +10,7 @@ use App\Models\NotificationCategory;
 use App\Services\NotificationBroadcast;
 use App\Support\V1\ListingAccess;
 use App\Support\V1\NotificationRow;
+use App\Support\V1\Wmu;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -154,14 +155,8 @@ class NotificationsController extends Controller
         }
 
         $province = (string) $request->input('province');
-        $wmus = $this->wmuNumbers($request->input('wmus'));
-
-        $wmuIds = DB::table('wmus')
-            ->where('province', $province)
-            ->whereIn('wmu_number', $wmus)
-            ->pluck('wmu_id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
+        $wmus = Wmu::numbers($request->input('wmus'));
+        $wmuIds = Wmu::idsFor($province, $wmus);
 
         if ($wmuIds === []) {
             return ApiResponse::invalid([
@@ -451,30 +446,6 @@ class NotificationsController extends Controller
         return DB::table('land')
             ->where('land_id', $landId)
             ->first(['land_id', 'land_name', 'address', 'land_lat', 'land_lng']);
-    }
-
-    /**
-     * The management units from the request.
-     *
-     * Accepts an array or a comma-separated string, because the apps send
-     * both.
-     *
-     * @return list<string>
-     */
-    private function wmuNumbers(mixed $wmus): array
-    {
-        if (is_string($wmus)) {
-            $wmus = explode(',', $wmus);
-        }
-
-        if (! is_array($wmus)) {
-            return [];
-        }
-
-        return array_values(array_filter(array_map(
-            fn ($w) => trim((string) $w),
-            $wmus,
-        ), fn ($w) => $w !== ''));
     }
 
     /** Native types: the old API returned these as strings from a raw query. */

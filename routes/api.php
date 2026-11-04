@@ -1,11 +1,15 @@
 <?php
 
+use App\Http\Controllers\Api\V1\ChatController;
+use App\Http\Controllers\Api\V1\FishingLandsController;
+use App\Http\Controllers\Api\V1\HuntersTagsController;
 use App\Http\Controllers\Api\V1\ListingsController;
 use App\Http\Controllers\Api\V1\NotificationsController;
 use App\Http\Controllers\Api\V1\RequestsController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserSettingsController;
+use App\Http\Controllers\Api\V1\WmuController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -131,5 +135,37 @@ Route::prefix('v1')->group(function () {
 
         Route::get('user-settings/get-notification-settings', [UserSettingsController::class, 'get']);
         Route::post('user-settings/save-notification-settings', [UserSettingsController::class, 'save']);
+
+        /*
+         * A hunter's tags, which are what a hunting alert matches on.
+         *
+         * The old controller's `list` and `categories` actions are not here:
+         * both were copies of the Notifications endpoints of the same name
+         * and both answer with a PHP fatal error on the live old API. See
+         * App\Http\Controllers\Api\V1\HuntersTagsController.
+         */
+        Route::get('hunters-tags/get-all-tags', [HuntersTagsController::class, 'index']);
+        Route::get('hunters-tags/get-tag', [HuntersTagsController::class, 'show']);
+        Route::post('hunters-tags/add-tag', [HuntersTagsController::class, 'store']);
+        Route::post('hunters-tags/update-tag', [HuntersTagsController::class, 'update']);
+        Route::post('hunters-tags/delete-tag', [HuntersTagsController::class, 'destroy']);
+
+        // Saved conversations with the in-app assistant: storage only.
+        Route::get('chat/list', [ChatController::class, 'index']);
+        Route::get('chat/get-history', [ChatController::class, 'show']);
+        Route::post('chat/add-history', [ChatController::class, 'store']);
+        Route::post('chat/update-history', [ChatController::class, 'update']);
+        Route::post('chat/delete-history', [ChatController::class, 'destroy']);
+
+        /*
+         * Reference data. None of it is per-account; the token is required
+         * only because the old API required one.
+         */
+        Route::get('wmu/games', [WmuController::class, 'games']);
+        Route::get('wmu/game-season-details', [WmuController::class, 'gameSeasonDetails']);
+        Route::get('wmu/species', [WmuController::class, 'species']);
+
+        Route::get('fishing-lands/province-regulations', [FishingLandsController::class, 'index']);
+        Route::get('fishing-lands/regulations', [FishingLandsController::class, 'show']);
     });
 });

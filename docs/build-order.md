@@ -44,7 +44,7 @@ written.
 | 2 | Requests: submit, upcoming, today-bookings | 3 | core loop | first handover milestone |
 | 3 | User, UserSettings, Security | 14 | onboarding | **done** |
 | 4 | Notifications remainder | 8 | — | **done** |
-| 5 | HuntersTags, Chat, Wmu, FishingLands | 17 | — | self-contained |
+| 5 | HuntersTags, Chat, Wmu, FishingLands | 15 | — | **done** |
 | 6 | ManageListings, non-payment | 18 | — | largest controller |
 | 7 | Payments | 10 | Stripe decision | do not port Moneris |
 | — | MarketplaceOrders | 2 | — | **skip: retired** |
@@ -162,15 +162,76 @@ one, which makes it safe. What to do about the rows already there, the old API,
 position capture and fan-out size are decisions, not ports.
 `docs/profile-positions.md` has the measurements and the options.
 
-### 5. Self-contained features
+### 5. Self-contained features — DONE
+
+**15 endpoints, not 17.** Two of the HuntersTags controller's seven actions
+were never endpoints: `hunters-tags/list` and `hunters-tags/categories` are
+copies of the two Notifications actions of the same name, pasted in and left
+behind. `list` carries a double comma in its SELECT, and both reference
+classes the file never imports. Both answer with a PHP fatal error on the
+running old API:
 
 ```
-Port the HuntersTags controller, 7 endpoints — 10h
-Port the Chat controller, 5 endpoints — 7h
-Port the Wmu controller, 3 endpoints, with the province allowlist — 4h
-Port the FishingLands controller, 2 endpoints — 3h
-Contract tests and OpenAPI entries for these four — 4h
+hunters-tags/list        500  Class '...\v7\NotificationsUsersMapping' not found
+hunters-tags/categories  500  Class '...\v7\NotificationCategories' not found
 ```
+
+So no app build can be calling them, and the working versions —
+`notifications/list` and `notifications/categories` — were ported in group 4.
+
+What changed beyond translation:
+
+- **A tag was filed against the wrong province.** `add-tag` resolved each
+  management unit with `WMU::findOne(['wmu_number' => $wmu])`, by number
+  alone. `wmu_number` is not unique: 1,599 rows carry 1,145 distinct numbers,
+  and "3" exists in six provinces. A Saskatchewan tag for unit 3 could be
+  filed against Manitoba's unit 3, so the hunter is alerted about the wrong
+  province and missed for their own. 3 zone rows are in that state today.
+  Resolution is now by province and number together, in
+  `App\Support\V1\Wmu`, which the hunting alert endpoint already used.
+- **A client could write to the unit reference table.** When a number did not
+  resolve, `add-tag` inserted a new `wmus` row holding nothing but that
+  number. 58 rows have no province as a result, with values like "00539" and
+  "69A-2". An unknown unit is now a validation failure.
+- **Expiry swept every account.** `get-all-tags` called
+  `HuntersMatchTags::updateExpiredStatus()`, an `updateAll` across the whole
+  table, so one hunter opening that screen rewrote every other hunter's rows
+  and whether a tag counted as expired depended on who had read theirs most
+  recently. It now expires the caller's own rows only — and alert matching no
+  longer depends on the sweep at all: a tag past its season is excluded by
+  date as well as by status. All 72 tags in the table are currently Expired.
+- **A tag could be written with any status, any date, any species.** Status is
+  an enum of three values and was unvalidated; dates were passed through as
+  text; the species id was checked only by the model, whose failure the
+  controller reported as "something went wrong". All checked now, and the tag
+  and its units are written in one transaction — `update-tag` deleted and
+  reinserted the units with no transaction, so a failure part way through
+  left a tag covering some of the units asked for and none of the rest.
+- **Chat had no limits.** `history` is LONGTEXT and nothing capped what a
+  client could store; it is a megabyte now. Access control was already right
+  in that controller — every lookup was scoped to the account — so the rest is
+  the envelope and the status codes.
+- **The games list repeated itself.** `wmu/games` built it by walking the
+  game details and appending each one's game, so a unit with two details for
+  the same game listed it twice. Distinct now.
+- **Season tables stayed behind the allowlist**, which is the only thing
+  standing between a client and a table name, and is now expressed once
+  rather than twice. Nine provinces have a season table; NL, NT, NU and QC
+  do not.
+- **Reference names are fit to display.** 13 of the 174 species names hold a
+  carriage return and newline, so "White-tailed\r\nDeer" reached the app
+  wherever a species was named. Whitespace is collapsed; matching is by
+  `species_id` everywhere, so nothing else changes.
+- **The fishing pair returned two shapes under one key** — `regulations` was a
+  list from one endpoint and a single object from the other. The list is
+  `items` and the single row is `item`, as everywhere else in this API.
+
+One question for the app developer: `wmu/game-season-details` requires
+`wmu_id` and does not use it — the old endpoint required it and filtered on
+`game_detail_id` alone. It stays that way deliberately, because `wmu/games`
+takes the unit *number* in a parameter called `id` while this one calls its
+parameter `wmu_id`, and which identifier the app actually sends here cannot be
+settled from the data. Filtering on a guess would silently return nothing.
 
 ### 6. ManageListings
 
@@ -220,27 +281,28 @@ Decide what to do about profile positions — see docs/profile-positions.md — 
 | 2. Finish Requests | 0 |
 | 3. User, settings, security | 0 |
 | 4. Notifications | 0 |
-| 5. Self-contained features | 28 |
+| 5. Self-contained features | 0 |
 | 6. ManageListings | 66 |
 | 7. Payments | 60 |
 | Cross-cutting | 27 |
-| **Total** | **181** |
+| **Total** | **153** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest
 has moved, since both read the same database.
 
-Excluding payments and cross-cutting: **94 hours** to finish every endpoint
+Excluding payments and cross-cutting: **66 hours** to finish every endpoint
 the new app needs apart from paying for things.
 
 ## What is already done
 
-**54 endpoints.** Token middleware, all thirteen Listings endpoints, all
-sixteen Requests endpoints, all ten Notifications endpoints, and the fourteen
-in the user, settings and security group.
+**69 endpoints.** Token middleware, all thirteen Listings endpoints, all
+sixteen Requests endpoints, all ten Notifications endpoints, the fourteen in
+the user, settings and security group, and the fifteen in hunters tags, chat
+and reference data.
 
-Interactive documentation at `/docs` covers every one of them, with 124 tests
-and six enforced rules that hold for endpoints nobody has written yet (see
+Interactive documentation at `/docs` covers every one of them, with 147 tests
+and seven enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 
 - no controller may `select('*')`
@@ -248,6 +310,7 @@ and six enforced rules that hold for endpoints nobody has written yet (see
 - nothing may stay in that public list once it is guarded
 - every open endpoint that sends mail is rate limited
 - no controller may read an account id from the request
+- only `App\Support\V1\Position` may store a caller's position
 - every route appears in the OpenAPI document
 
 The API is served from `/v1/`, on its own host, with no `/api` segment.

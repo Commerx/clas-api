@@ -407,6 +407,59 @@ class NotificationBroadcastTest extends TestCase
             'An alert nobody can receive must not be stored.');
     }
 
+    /**
+     * A tag past its season does not match, whatever its status says.
+     *
+     * The status column is only moved to Expired when somebody calls
+     * hunters-tags/get-all-tags, so an account that has not opened that
+     * screen since the season ended still carries Active rows — the sweep
+     * was a side effect of a read rather than anything scheduled, and in the
+     * old API it swept every account at once. Matching on the date as well
+     * means the result no longer depends on who read their tags last.
+     */
+    public function test_a_hunting_alert_skips_a_tag_whose_season_has_ended(): void
+    {
+        $wmu = DB::table('wmus')->whereNotNull('province')->first();
+
+        if ($wmu === null) {
+            $this->markTestSkipped('No WMU rows with a province.');
+        }
+
+        $tagId = (int) DB::table('hunters_match_tags')->insertGetId([
+            'user_id' => $this->user->id,
+            'species_id' => 1,
+            'species_gender' => 'TestGender',
+            'province' => $wmu->province,
+            'status' => 'Active',
+            'season_start_date' => '2019-09-01',
+            'season_end_date' => '2019-12-01',
+        ]);
+
+        DB::table('hunters_match_tags_wmu_zones')->insert([
+            'tag_id' => $tagId, 'wmu_id' => $wmu->wmu_id,
+        ]);
+
+        try {
+            $this->postJson('/v1/notifications/hunting-alert', [
+                'token' => $this->token(),
+                'land_id' => $this->landId,
+                'province' => $wmu->province,
+                'wmus' => [$wmu->wmu_number],
+                'species_id' => 1,
+                'species_gender' => 'TestGender',
+                'hunters_count' => 1,
+                'message_body' => 'The season for this tag ended in 2019.',
+            ])->assertStatus(409);
+
+            $this->assertSame(0, DB::table('notifications')
+                ->where('land_id', $this->landId)->count(),
+                'An out-of-season tag must not make the alert deliverable.');
+        } finally {
+            DB::table('hunters_match_tags_wmu_zones')->where('tag_id', $tagId)->delete();
+            DB::table('hunters_match_tags')->where('id', $tagId)->delete();
+        }
+    }
+
     public function test_a_hunting_alert_rejects_unknown_management_units(): void
     {
         $this->postJson('/v1/notifications/hunting-alert', [

@@ -110,6 +110,13 @@ class NotificationBroadcast
      * that tag from the notification. One row per user: somebody with two
      * matching tags is notified once, as before.
      *
+     * A tag past its season is excluded by date as well as by status. The
+     * status column is only moved to Expired when somebody calls
+     * hunters-tags/get-all-tags, so an account that has not opened that
+     * screen since the season ended still carries Active rows — the sweep was
+     * a side effect of a read rather than anything scheduled. A tag with no
+     * end date is the no-tag-required kind and never expires this way.
+     *
      * @param  list<int>  $wmuIds
      * @return array<int,?int>
      */
@@ -125,6 +132,8 @@ class NotificationBroadcast
             ->where('tags.species_id', $speciesId)
             ->where('tags.species_gender', $gender)
             ->where('tags.status', 'Active')
+            ->where(fn ($tag) => $tag->whereNull('tags.season_end_date')
+                ->orWhereRaw('tags.season_end_date >= CURDATE()'))
             ->groupBy('tags.user_id')
             ->select(['tags.user_id', DB::raw('MIN(tags.id) AS tag_id')]);
 
