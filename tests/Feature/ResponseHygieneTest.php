@@ -285,6 +285,57 @@ class ResponseHygieneTest extends TestCase
         )));
     }
 
+    /**
+     * Only Position may store a caller's position.
+     *
+     * The old API wrote user_lat/user_lng at five sites, each with its own
+     * copy of the validation, and they had drifted. More to the point, the
+     * column cannot be written blindly: 5,610 of 5,611 profiles hold the web
+     * map's default centre, 88 active listings lie within the notification
+     * radius of that one point, and a profile sitting there would otherwise
+     * receive every alert posted on any of them. Position is where that is
+     * decided, so a new endpoint taking coordinates cannot quietly reopen it.
+     */
+    public function test_only_the_position_class_writes_a_profile_position(): void
+    {
+        $offenders = [];
+        $checked = 0;
+
+        foreach (array_merge($this->controllerFiles(), $this->sourceFiles()) as $path) {
+            if (basename($path) === 'Position.php') {
+                continue;
+            }
+
+            $checked++;
+
+            if (preg_match_all('/[\x27\x22]user_(?:lat|lng)[\x27\x22]\\s*=>/', File::get($path), $m)) {
+                foreach ($m[0] as $hit) {
+                    $offenders[] = basename($path).': '.$hit;
+                }
+            }
+        }
+
+        $this->assertGreaterThan(0, $checked, 'No source files were checked.');
+
+        $this->assertSame([], $offenders, implode(PHP_EOL, array_merge(
+            ['These files write a profile position directly.'],
+            ['Go through the Position class in App\\Support\\V1, which decides what counts as one.'],
+            $offenders,
+        )));
+    }
+
+    /** @return list<string> */
+    private function sourceFiles(): array
+    {
+        return array_map(
+            fn ($file) => $file->getPathname(),
+            array_filter(
+                File::allFiles(app_path()),
+                fn ($file) => $file->getExtension() === 'php',
+            )
+        );
+    }
+
     /** @return list<string> */
     private function controllerFiles(): array
     {

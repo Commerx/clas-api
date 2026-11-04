@@ -150,15 +150,17 @@ complete and tested either way. Supplying the credentials is the remaining
 step, and it is worth telling the client that push has not worked since July
 2024 regardless of this rebuild.
 
-**Proximity alerts reach nobody, and that is a data problem.** A profile
-position is whatever coordinates a client last sent, and a client without a
-location sends the map's default centre. On the local copy, 5,610 of 5,611
-profiles sit at exactly that one point, and **no real active listing has
-anybody within 25 km of it**. A further 332 listings have no coordinates at
-all. Community awareness is therefore inert today, in both applications. The
-rebuild preserves the rule deliberately rather than papering over it. Note
-that fixing the position capture would, on its own, turn a single alert into a
-push to thousands — so the two decisions belong together.
+**Proximity alerts are all or nothing, and that is a data problem.** 5,610 of
+5,611 profiles hold one coordinate: the old web app's default map centre,
+which a single statement wrote over the whole table some time after December
+2023 — ten accounts that genuinely sat near Lahore in that month hold it too
+now. Of the active listings with coordinates, 88 lie within 25 km of that
+point, so an alert on any of them reaches **every account**; the other 16,451
+reach nobody, as do the 302 with no coordinates. The new API treats a position
+within fifty metres of a known map default as no position and refuses to store
+one, which makes it safe. What to do about the rows already there, the old API,
+position capture and fan-out size are decisions, not ports.
+`docs/profile-positions.md` has the measurements and the options.
 
 ### 5. Self-contained features
 
@@ -207,7 +209,7 @@ Deploy pipeline from the repository to the staging server — 4h
 Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
 Supply an FCM service account so push can be delivered at all — 3h
-Decide what to do about profile positions, which are the map default for 5,610 of 5,611 users — 4h
+Decide what to do about profile positions — see docs/profile-positions.md — 4h
 ```
 
 ## Totals

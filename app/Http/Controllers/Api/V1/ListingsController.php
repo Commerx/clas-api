@@ -8,6 +8,7 @@ use App\Models\KeyFeature;
 use App\Services\SunTimes;
 use App\Support\V1\ListingAccess;
 use App\Support\V1\ListingRow;
+use App\Support\V1\Position;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -629,31 +630,16 @@ class ListingsController extends Controller
 
     /**
      * These endpoints double as a position report: when the caller sends
-     * coordinates, they are written to the user's profile.
+     * coordinates, they are written to the user's profile. Position decides
+     * what counts as a position; a map's default centre does not.
      */
     private function rememberUserPosition(Request $request): void
     {
-        $lat = $this->coordinate($request->input('user_lat'), 90);
-        $lng = $this->coordinate($request->input('user_lng'), 180);
-
-        if ($lat === null || $lng === null) {
-            return;
-        }
-
-        DB::table('profile')
-            ->where('user_id', $request->attributes->get('api_user')->id)
-            ->update(['user_lat' => $lat, 'user_lng' => $lng]);
-    }
-
-    private function coordinate(mixed $value, float $max): ?float
-    {
-        if ($value === null || $value === '' || ! is_numeric($value)) {
-            return null;
-        }
-
-        $value = (float) $value;
-
-        return ($value < -$max || $value > $max) ? null : $value;
+        Position::remember(
+            $this->userId($request),
+            $request->input('user_lat'),
+            $request->input('user_lng'),
+        );
     }
 
     /**

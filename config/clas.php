@@ -76,6 +76,22 @@ return [
         'ATV', 'SnowMobile', 'Motorised Vehicles',
     ],
 
+    /*
+     * Coordinates a map centred itself on, which arrive looking like a
+     * position but are not one. The first pair is the old web app's default
+     * map centre, hardcoded in ten of its views and also the coordinate of
+     * the Waldron listing; the second is the marketplace map's. A profile
+     * holding one of these is treated as having no position at all, and a
+     * client sending one has it dropped rather than stored. The Position
+     * class in App\Support\V1 explains why, and what the data holds today.
+     */
+    'position' => [
+        'placeholders' => [
+            [49.90261265, -114.12588656],
+            [54.4217013, -119.4839251],
+        ],
+    ],
+
     /* What the app offers at check-out, grouped as the picker shows them. */
     'checkout_categories' => [
         'Big Game' => [

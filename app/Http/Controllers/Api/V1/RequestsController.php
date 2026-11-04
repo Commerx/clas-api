@@ -9,6 +9,7 @@ use App\Services\BookingSubmission;
 use App\Services\RequestNotifier;
 use App\Support\V1\ListingAccess;
 use App\Support\V1\ListingRow;
+use App\Support\V1\Position;
 use App\Support\V1\RequestRow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -324,12 +325,16 @@ class RequestsController extends Controller
     /** Public listings nearest the caller, closest first. */
     private function nearbyListings(Request $request): array
     {
-        $lat = $this->coordinate($request->input('user_lat'), 90);
-        $lng = $this->coordinate($request->input('user_lng'), 180);
+        $position = Position::usable(
+            $request->input('user_lat'),
+            $request->input('user_lng'),
+        );
 
-        if ($lat === null || $lng === null) {
+        if ($position === null) {
             return [];
         }
+
+        [$lat, $lng] = $position;
 
         $query = $this->suggestionQuery()
             ->selectRaw($this->distanceExpression($lat, $lng))
@@ -391,15 +396,11 @@ class RequestsController extends Controller
 
     private function rememberPosition(Request $request, int $userId): void
     {
-        $lat = $this->coordinate($request->input('user_lat'), 90);
-        $lng = $this->coordinate($request->input('user_lng'), 180);
-
-        if ($lat === null || $lng === null) {
-            return;
-        }
-
-        DB::table('profile')->where('user_id', $userId)
-            ->update(['user_lat' => $lat, 'user_lng' => $lng]);
+        Position::remember(
+            $userId,
+            $request->input('user_lat'),
+            $request->input('user_lng'),
+        );
     }
 
     /** One push token per user per OS: the old rows are replaced, not updated. */
@@ -416,17 +417,6 @@ class RequestsController extends Controller
         DB::table('device_tokens')->insert([
             'user_id' => $userId, 'os' => $os, 'device_token' => $token,
         ]);
-    }
-
-    private function coordinate(mixed $value, float $max): ?float
-    {
-        if ($value === null || $value === '' || ! is_numeric($value)) {
-            return null;
-        }
-
-        $value = (float) $value;
-
-        return ($value < -$max || $value > $max) ? null : $value;
     }
 
     /**

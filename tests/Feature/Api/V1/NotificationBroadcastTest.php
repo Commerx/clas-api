@@ -14,13 +14,13 @@ use Tests\TestCase;
  * Who receives a notification, and who may send one.
  *
  * The fan-out is tested against controlled coordinates rather than the real
- * ones. Two reasons. A community alert about the fixture listing would write
- * 5,610 mapping rows, because 5,610 of 5,611 profiles sit at exactly the
- * map's default centre — the old API persists whatever coordinates a client
- * sends, and a client with no location sends that default. And for the same
- * reason the real data cannot exercise the radius at all: every real listing
- * has nobody within 25 km of it. So these tests move the fixture listing and
- * one profile to a chosen point, and put both back afterwards.
+ * ones, because the real ones cannot exercise a radius. 5,610 of 5,611
+ * profiles hold exactly 49.90261265,-114.12588656 — the web map's default
+ * centre, which a single statement wrote over the whole table some time
+ * after December 2023. Of the active listings, 88 lie within 25 km of that
+ * one point and 16,451 lie outside it, so every alert is all or nothing;
+ * Position holds the detail. These tests therefore move the fixture listing
+ * and one profile to a chosen point, and put both back afterwards.
  *
  * PushSender and PeasiAlerts are bound as instances so what would have been
  * delivered can be inspected without a Firebase project or a call to an
@@ -172,9 +172,10 @@ class NotificationBroadcastTest extends TestCase
     /**
      * A listing with no coordinates must reach nobody, not everybody.
      *
-     * 332 listings are in this state. The risk is in the guard: dropping the
-     * distance condition while keeping the query selects every profile in the
-     * database.
+     * 302 active public listings are in this state. The risk is in the
+     * guard: dropping the
+     * distance condition while keeping the query selects every profile in
+     * the database.
      */
     public function test_a_listing_without_coordinates_reaches_nobody(): void
     {
@@ -191,6 +192,65 @@ class NotificationBroadcastTest extends TestCase
 
         $this->assertSame(0, $data['recipients'],
             'No coordinates must mean no recipients, never all of them.');
+    }
+
+    /**
+     * A profile holding a map's default centre is not near anything.
+     *
+     * This is the one that protects the user base. 88 active listings lie
+     * within 25 km of 49.90261265,-114.12588656, and 5,610 profiles hold
+     * that exact pair, so without the guard an alert on any of those 88
+     * reaches every account — and, once push has credentials, pushes to
+     * every device.
+     */
+    public function test_a_profile_on_the_map_default_is_not_near_anything(): void
+    {
+        [$placeholderLat, $placeholderLng] = config('clas.position.placeholders')[0];
+
+        DB::table('land')->where('land_id', $this->landId)->update([
+            'land_lat' => $placeholderLat,
+            'land_lng' => $placeholderLng,
+        ]);
+        DB::table('profile')->where('user_id', $this->user->id)->update([
+            'user_lat' => $placeholderLat,
+            'user_lng' => $placeholderLng,
+        ]);
+
+        $data = $this->postJson('/v1/notifications/community-awareness', [
+            'token' => $this->token(),
+            'land_id' => $this->landId,
+            'message_body' => 'Posted on a listing at the default centre.',
+        ])->assertStatus(201)->json('data');
+
+        $this->assertSame(0, $data['recipients'],
+            'A placeholder position must reach nobody, not the whole database.');
+    }
+
+    /**
+     * The API must not write a placeholder position onto a profile.
+     *
+     * Listings and Requests double as position reports. Whatever is decided
+     * about the rows already holding the default centre, this API must not
+     * add to them.
+     */
+    public function test_a_client_sending_the_map_default_does_not_move_the_profile(): void
+    {
+        $this->placeUserNearTheListing();
+
+        [$placeholderLat, $placeholderLng] = config('clas.position.placeholders')[0];
+
+        // Sent at six decimal places, as a client that rounds the pair would:
+        // it is still the default centre, and must still be dropped.
+        $this->getJson(sprintf(
+            '/v1/listings/all?token=%s&limit=1&user_lat=%F&user_lng=%F',
+            $this->token(), $placeholderLat, $placeholderLng,
+        ))->assertStatus(200);
+
+        $profile = DB::table('profile')->where('user_id', $this->user->id)->first();
+
+        $this->assertSame(self::REMOTE_LAT, (float) $profile->user_lat,
+            'The placeholder must be dropped, leaving the real position alone.');
+        $this->assertSame(self::REMOTE_LNG, (float) $profile->user_lng);
     }
 
     // ---- notification settings -----------------------------------------

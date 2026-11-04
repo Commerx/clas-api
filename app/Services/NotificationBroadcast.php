@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Notification;
 use App\Models\UserSetting;
+use App\Support\V1\Position;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -60,19 +61,23 @@ class NotificationBroadcast
      * because dropping the HAVING while keeping the query selects every
      * profile in the database.
      *
-     * Zero counts as missing, and 332 of the listings are in that state. The
+     * Zero counts as missing, and 302 of the 16,844 active public listings
+     * are in that state (332 of all 16,980 land rows). The
      * old code passed 0,0 through to the arithmetic, which put every real
      * position thousands of kilometres away and so matched nobody either; the
      * outcome is the same and the reason is now explicit rather than
-     * incidental. Worth knowing on its own: an alert about any of those 332
+     * incidental. Worth knowing on its own: an alert about any of those 302
      * listings reaches no one, and neither application says so.
      *
      * @return array<int,?int>
      */
     public function nearbyProfiles(?float $lat, ?float $lng): array
     {
-        $lat = $this->coordinate($lat, 90);
-        $lng = $this->coordinate($lng, 180);
+        // The listing's own coordinate is only checked for validity, not for
+        // being a placeholder: the default centre is also where the Waldron
+        // listing really is, and an alert about it is a real alert.
+        $lat = Position::coordinate($lat, 90);
+        $lng = Position::coordinate($lng, 180);
 
         if ($lat === null || $lng === null) {
             return [];
@@ -80,10 +85,18 @@ class NotificationBroadcast
 
         $radius = (float) config('notifications.radius_km');
 
-        return DB::table('profile')
+        $query = DB::table('profile')
             ->select('user_id')
             ->selectRaw($this->distanceExpression($lat, $lng))
-            ->havingRaw('distance <= ?', [$radius])
+            ->havingRaw('distance <= ?', [$radius]);
+
+        // A profile holding a map's default centre has no position, so it is
+        // not near anything. Without this, 88 active listings lie within the
+        // radius of that one point and an alert on any of them reaches every
+        // account in the database; see Position for how the data got there.
+        Position::excludePlaceholders($query);
+
+        return $query
             ->pluck('user_id')
             ->mapWithKeys(fn ($id) => [(int) $id => null])
             ->all();
@@ -265,15 +278,5 @@ class NotificationBroadcast
             $lat,
             $lng,
         );
-    }
-
-    private function coordinate(?float $value, float $max): ?float
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        // Zero is how an unset coordinate is stored here, not a position.
-        return ($value < -$max || $value > $max || $value === 0.0) ? null : $value;
     }
 }
