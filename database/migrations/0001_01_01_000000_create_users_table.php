@@ -6,6 +6,14 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    /*
+     * This application's own schema, not the CLAS database shared with
+     * the Yii application. Without the pin, `php artisan migrate` would
+     * create these tables inside that shared schema, because the default
+     * connection points there.
+     */
+    protected $connection = 'clas_api';
+
     /**
      * Run the migrations.
      */

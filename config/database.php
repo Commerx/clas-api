@@ -64,6 +64,38 @@ return [
             ]) : [],
         ],
 
+        /*
+         * This application's own tables — the migration history, and the
+         * cache, queue and session tables if any of those drivers ever move
+         * to the database. A separate schema from `mysql` above, which is
+         * the CLAS database shared with the Yii application.
+         *
+         * The split exists because `php artisan migrate` would otherwise
+         * create Laravel's stock tables inside that shared schema. The three
+         * stock migrations are pinned to this connection, and the migrations
+         * that change the shared schema pin themselves to `mysql`, so which
+         * database a migration touches is stated in the migration rather
+         * than inherited from whatever .env happens to say.
+         *
+         *   php artisan migrate --database=clas_api
+         */
+        'clas_api' => [
+            'driver' => 'mysql',
+            'url' => env('CLAS_API_DB_URL'),
+            'host' => env('CLAS_API_DB_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('CLAS_API_DB_PORT', env('DB_PORT', '3306')),
+            'database' => env('CLAS_API_DB_DATABASE', 'clas_api'),
+            'username' => env('CLAS_API_DB_USERNAME', env('DB_USERNAME', 'root')),
+            'password' => env('CLAS_API_DB_PASSWORD', env('DB_PASSWORD', '')),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

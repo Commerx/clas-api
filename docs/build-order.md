@@ -290,12 +290,13 @@ In v1, `App\Services\ListingPhotos` requires a real JPEG, PNG, GIF or WebP
 within a size limit, takes the extension from what the bytes are rather than
 from the name, and writes nothing until all of that holds.
 
-**This needs your decision, not just a port:** the old endpoint is live, and
-the standing rule is that the old code is not changed before the cutover.
-Options are to accept it for the overlap window, to block `.php` under
-`uploads/` in the web server configuration (a one-line `.htaccess` change
-rather than a code change), or to fix the old endpoint. `docs/` has no
-separate note for it; this is the record.
+**Decided on 2026-11-04: left as it is.** Blocking it would have needed only
+a `<FilesMatch>` deny for `uploads/` in `web/.htaccess` — server
+configuration rather than a code change — and that was put to Suresh with the
+severity stated. The answer was to leave it. So the exposure stands for the
+whole overlap window and ends when the old API is retired, which makes the
+sunset date the thing that bounds it. Fixed in v1 either way. Don't raise it
+again unless that date slips materially.
 
 ### Smaller things in this group
 
@@ -344,16 +345,62 @@ in that state. Closing it needs an acceptance endpoint in this API that
 resolves the account at acceptance time instead — about 4h, and it needs the
 app to handle the link.
 
-### 7. Payments — after the Stripe decision
+### 7. Payments — Stripe, in two phases
+
+Recommended: **Stripe**, with the card tokenised on the device so it never
+reaches a CLAS server. `docs/payments-decision.md` has the measurements and
+the argument. The short version: every subscription in the database has
+expired and nothing has been charged since 2024-09-24, so there are no cards
+to migrate and the usual reason to stay with a gateway does not apply; and
+the old endpoint takes the raw card number, which puts the application in PCI
+SAQ D scope where client-side tokenisation would put it in SAQ A.
+
+**The card file migrates; nobody re-enters a card.** Stripe runs a documented
+PCI-gated migration in which Moneris sends the cards directly to Stripe and
+Stripe returns a file mapping each Moneris identifier to its replacement.
+`docs/moneris-to-stripe-migration.md` is the plan: the process, the mapping,
+the schema, how to avoid two schedulers charging the same subscription, and
+what to ask each company. It adds 27 hours, or 36 if the old renewal cron may
+not be touched.
+
+Before any of it: run `docs/sql/production-subscription-audit.sql` on
+production. It is read only. The local copy's subscription tables are stale,
+and an earlier version of these notes drew the wrong conclusion from them.
+
+It runs in two phases, decided 2026-11-05: Stripe takes new customers first,
+Moneris keeps the existing book until it is moved.
+
+**Phase 1 — new customers on Stripe (46h).** Needs a Stripe account and its
+test keys; nothing here needs live keys.
 
 ```
-Decide Stripe versus Moneris for the rebuilt API, and record it — 2h
-Build the payment abstraction and Stripe integration — 16h
-Port user/subscribe onto the new payment path — 10h
-Port the WMU, dark mode and fishing lands subscription endpoints — 12h
+Stripe PHP SDK, config, keys and test-mode wiring — 3h
+Payment service interface with one implementation, Stripe — 8h
+The gateway columns on the five subscription tables, plus rollback — 2h
+user/subscribe on Stripe, taking a payment method id, never a card — 8h
+The WMU, dark mode and fishing lands subscription endpoints — 8h
+Renewal scheduler in v1 for gateway = 'stripe' rows — 6h
+Webhooks for the asynchronous outcomes — 5h
+Tests against Stripe test keys, including the coexistence assertion — 6h
+```
+
+Phase 1 carries one trap worth reading before it starts: a Stripe-created row
+in `user_subscription` is still a row the old renewal cron selects, and its
+fallback charges any Moneris card the user has left on file — or emails the
+customer a payment decline. **Decided 2026-11-05:** those rows are written
+with `auto_renew = 0`, which the cron already filters on and nothing else in
+the old application reads, so the old code stays sealed. That makes one
+standing invariant — every row this API creates carries `auto_renew = 0`, and
+the cron must keep filtering `auto_renew = 1`. The migration document has
+the reasoning and the failure mode.
+
+**Phase 2 — move the existing book (38h).**
+
+```
+Run the production subscription audit and size the live book — 1h
+Request the card export from Moneris, early: it is the longest pole — 2h
+Migrate the card file: schema, mapping importer, gateway switch, ramp — 27h
 Port the signage payment endpoints in ManageListings — 8h
-Reconcile subscription state between the old and new applications — 6h
-Payment tests against Stripe test keys — 6h
 ```
 
 ### Cross-cutting, to schedule alongside
@@ -362,6 +409,8 @@ Payment tests against Stripe test keys — 6h
 Rotate the four secrets committed in the old repository: the Google timezone
 key, the Moneris store id and API token, the FCM server key and the PEASI
 token — 2h
+Clear the card data out of the production logs and stop $_POST being logged —
+see docs/payments-decision.md — 2h
 Produce the field-by-field change report for the app developer — 2h
 Set up the staging subdomain, TLS and DNS for the new API — 4h
 Deploy pipeline from the repository to the staging server — 4h
@@ -370,7 +419,6 @@ Decide and document the old API sunset date and the forced-update trigger — 2h
 Supply an FCM service account so push can be delivered at all — 3h
 Decide what to do about profile positions — see docs/profile-positions.md — 4h
 Decide where listing photos live once the API moves to its own subdomain — 4h
-Decide whether the old upload endpoint is blocked before the cutover — 1h
 Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 ```
 
@@ -384,9 +432,9 @@ Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 | 4. Notifications | 0 |
 | 5. Self-contained features | 0 |
 | 6. ManageListings | 0 |
-| 7. Payments | 60 |
-| Cross-cutting | 36 |
-| **Total** | **96** |
+| 7. Payments | 84 |
+| Cross-cutting | 37 |
+| **Total** | **121** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest

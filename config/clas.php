@@ -33,7 +33,51 @@ return [
     /* An unconfirmed account keeps working for this long after signing up. */
     'guest_days' => 7,
 
+    /*
+     * What things cost, and what a subscription of each type is.
+     *
+     * This is the only source of truth for this application. Nothing here
+     * reads the Yii application's `config/params.php` or checks a price
+     * against it at runtime: the two applications are separate deployments
+     * that happen to share a database, and a runtime dependency on the old
+     * one would outlive it. The values below were copied across once, from
+     * the production environment file, and from here on they are changed
+     * here.
+     *
+     * Noted because it matters when comparing the two: the Yii base
+     * `config/params.php` carries a stale map with only types 1-3 and type 3
+     * at 69.99, which every environment file then overrides with types 1-5
+     * and type 3 at 9.99. Production uses the override. The figures here
+     * follow the override, not the base file.
+     */
+    'subscriptions' => [
+        /*
+         * `user_subscription.subscription_type`. The id is what the column
+         * holds; both applications write it, so the numbers are fixed.
+         *
+         * `renews` says whether the old Yii renewal cron would charge it: it
+         * selects types 3, 4 and 5 only, so 1 and 2 are legacy and no longer
+         * renew. Keep them listed anyway — 892 rows carry them and their
+         * entitlement still has to be read.
+         *
+         * `amount` is per charge, not per month: type 2 is six months at
+         * 8.99 a month, which the old code expressed as a multiplication at
+         * the point of sale.
+         */
+        'types' => [
+            1 => ['name' => 'Monthly', 'period' => 'P1M', 'amount' => '29.99', 'renews' => false, 'sold' => false],
+            2 => ['name' => '6 Months', 'period' => 'P6M', 'amount' => '53.94', 'renews' => false, 'sold' => false],
+            3 => ['name' => 'Annual', 'period' => 'P1Y', 'amount' => '9.99', 'renews' => true, 'sold' => true],
+            4 => ['name' => 'Annual - Guide', 'period' => 'P1Y', 'amount' => '9.99', 'renews' => true, 'sold' => true],
+            5 => ['name' => 'Annual', 'period' => 'P1Y', 'amount' => '9.99', 'renews' => true, 'sold' => true],
+        ],
+
+        /* The type a new property-access subscription is created as. */
+        'default_type' => 5,
+    ],
+
     'prices' => [
+        /* What the app shows on the subscription screen. */
         'property_access' => [
             [
                 'id' => 5,
