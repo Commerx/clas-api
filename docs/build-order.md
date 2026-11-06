@@ -529,6 +529,12 @@ it reduces the Moneris book over time instead of ending it on a date, and
 anyone who never changes their card stays there. It is also what eventually
 removes the reason the old web card page has to stay in service.
 
+The move is silent by decision: nothing changes from the customer's side, and
+the Stripe account's statement descriptor is already CANADIAN LAND ACCESS, so
+a migrated charge is recognisable on a bank statement. That was the one thing
+that could have made silence a bad idea, since an unrecognised charge is how
+a migration turns into chargebacks.
+
 ```
 Port the signage payment endpoints in ManageListings — 8h
 ```
@@ -542,6 +548,20 @@ Deferred, not cancelled:
 ```
 
 ### Cross-cutting, to schedule alongside
+
+One of these is time-sensitive in a way the hours do not show. **Which Stripe
+account CLAS subscriptions go live on is undecided**, and the card-change
+migration accumulates customers in whichever account is used — so the cost of
+changing that choice grows with every subscriber who moves. Nothing is
+blocked today: test mode works, and the live-key decision is separate. What
+matters is that the production cutover does not quietly inherit the account
+whose test keys happen to be in `.env`.
+
+For the record, that account is `acct_1J08AcLcHWnrcjPs`, descriptor
+`CANADIAN LAND ACCESS`, Canadian, CAD — a CLAS account rather than a
+marketplace-branded one, despite being reached through what were described as
+the marketplace keys. It is also the account a bulk card export would have to
+target if the drain is ever replaced by a dated cutover.
 
 ```
 Rotate the committed secrets. A sweep of the tracked config files on
@@ -563,6 +583,8 @@ Deploy pipeline from the repository to the staging server — 4h
 Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
 Supply an FCM service account so push can be delivered at all — 3h
+Decide which Stripe account CLAS subscriptions go live on — undecided as of
+2026-11-06 — 1h
 Decide what to do about profile positions — see docs/profile-positions.md — 4h
 Decide where listing photos live once the API moves to its own subdomain — 4h
 Add a manager-acceptance endpoint so invitations to new accounts work — 4h
@@ -579,8 +601,8 @@ Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 | 5. Self-contained features | 0 |
 | 6. ManageListings | 0 |
 | 7. Payments | 8 |
-| Cross-cutting | 43 |
-| **Total** | **51** |
+| Cross-cutting | 44 |
+| **Total** | **52** |
 
 Payments is 8 of that now: phase 1 is built and phase 2 is deferred. The
 deferred migration work is 30 hours and is listed in group 7 so it is not

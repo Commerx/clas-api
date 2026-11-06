@@ -151,7 +151,18 @@ class CardOnFile
         ];
     }
 
-    /** What is on file now, for the app's payment screen. */
+    /**
+     * What is on file now.
+     *
+     * `gateway` is here for support and reporting — "which processor is this
+     * customer on" is the first question when a charge is queried — not for
+     * the app to show. The move is silent by decision (2026-11-06): from the
+     * customer's side nothing changes, same price, same renewal date, same
+     * card on file, and the statement descriptor is 'CANADIAN LAND ACCESS'
+     * on the Stripe account as well, so a migrated charge is recognisable.
+     * A descriptor the customer did not recognise would have been the one
+     * good reason to tell them, and it checked out.
+     */
     public function current(User $user): ?array
     {
         $row = DB::table('user_subscription')
@@ -165,8 +176,7 @@ class CardOnFile
         }
 
         return [
-            // Which processor will charge the next renewal. The app can use
-            // this to decide whether changing the card also moves them.
+            // Which processor will charge the next renewal.
             'gateway' => $row->gateway ?? 'moneris',
             'has_card' => $row->stripe_payment_method_id !== null || $row->data_key !== null,
         ];

@@ -452,10 +452,11 @@ class UserController extends Controller
     }
 
     /**
-     * Which processor holds the card, so the app can say what will happen.
+     * Which processor holds the card.
      *
-     * A subscriber still on Moneris sees `gateway: "moneris"`, which is the
-     * app's cue that changing their card will also move them to Stripe.
+     * For support and reporting rather than for display: the migration is
+     * silent by decision, because nothing changes from the customer's side
+     * and the statement descriptor is the same on both processors.
      */
     public function paymentMethod(Request $request, CardOnFile $cards): JsonResponse
     {
@@ -509,8 +510,13 @@ class UserController extends Controller
                 'last4' => $result['card']->last4,
                 'expiry' => $result['card']->expiry(),
             ],
-            // True when this call moved the account off Moneris, so the app
-            // can tell the customer their renewals have moved.
+            /*
+             * True when this call moved the account off Moneris.
+             *
+             * Not for the customer — the move is silent by decision. It is
+             * here so the app can report it and so the rate at which the
+             * book drains is measurable, which is the only measure of it.
+             */
             'moved_to_stripe' => $result['moved'],
             'subscriptions_updated' => $result['subscriptions'],
         ]);

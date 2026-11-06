@@ -2805,9 +2805,12 @@ MD;
                 'get' => [
                     'tags' => ['Security'],
                     'summary' => 'Which processor holds the card',
-                    'description' => 'So the app can say what changing the card will do. A '
-                        .'subscriber still on Moneris gets gateway "moneris", which is the cue '
-                        .'that replacing their card also moves their renewals to Stripe.',
+                    'description' => 'For support and reporting, not for display: the migration '
+                        .'is silent by decision. Nothing changes from the customers side — same '
+                        .'price, same renewal date, same card on file — and the statement '
+                        .'descriptor is CANADIAN LAND ACCESS on the Stripe account too, so a '
+                        .'migrated charge is recognisable on a bank statement. An unfamiliar '
+                        .'descriptor would have been the one good reason to tell them.',
                     'responses' => self::ok('What is on file.', [
                         'type' => 'object',
                         'properties' => [
@@ -2855,8 +2858,8 @@ MD;
                             ],
                             'moved_to_stripe' => ['type' => 'boolean',
                                 'description' => 'True when this call moved the account off '
-                                    .'Moneris, so the app can tell the customer their renewals '
-                                    .'have moved.'],
+                                    .'Moneris. Not for the customer: the move is silent. It is '
+                                    .'here so the rate at which the book drains is measurable.'],
                             'subscriptions_updated' => ['type' => 'integer'],
                         ],
                     ]) + self::failures([

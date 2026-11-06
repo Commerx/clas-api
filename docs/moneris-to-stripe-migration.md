@@ -118,6 +118,31 @@ the device and, for a subscriber still on Moneris, performs the migration:
 card, so the app can tell a Moneris subscriber that changing it will move
 their renewals.
 
+**The move is silent (2026-11-06).** The customer is told nothing, because
+from their side nothing changes: same price, same renewal date, same card on
+file. The one thing that could have made silence a bad idea is the statement
+descriptor — a charge the customer does not recognise is how a migration
+turns into chargebacks, and a chargeback is the one webhook event this API
+logs as critical. Checked on the Stripe account:
+
+```
+account:              acct_1J08AcLcHWnrcjPs
+statement descriptor: CANADIAN LAND ACCESS
+country / currency:   CA / cad
+```
+
+So a migrated charge appears on a bank statement exactly as a Moneris one
+does. `moved_to_stripe` stays in the response, not for the customer but so
+the rate at which the book drains is measurable — that rate is the only
+measure of this approach working.
+
+Worth noting what else that check settled: the account whose test keys we are
+using is a CLAS account, not a marketplace-branded one, which makes it a more
+plausible candidate for production than the name "marketplace keys" suggested.
+Still worth confirming whether CLAS subscriptions should land in that account
+or a separate one, since whichever is chosen is the one a bulk export would
+have to target later.
+
 What this gets, compared with the export:
 
 - **No card export to negotiate with Moneris**, no mapping file, nothing to
