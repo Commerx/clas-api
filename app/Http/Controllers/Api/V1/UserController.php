@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Mail\IssueReported;
 use App\Models\Profile;
 use App\Models\User;
+use App\Services\CardOnFile;
 use App\Services\Payments\PaymentGateway;
 use App\Services\Payments\PaymentGatewayException;
 use App\Services\Registration;
@@ -448,6 +449,71 @@ class UserController extends Controller
             'reference' => $result['payment']?->reference,
             'account' => AccountPayload::withProfile($this->caller($request)->fresh()),
         ], 201);
+    }
+
+    /**
+     * Which processor holds the card, so the app can say what will happen.
+     *
+     * A subscriber still on Moneris sees `gateway: "moneris"`, which is the
+     * app's cue that changing their card will also move them to Stripe.
+     */
+    public function paymentMethod(Request $request, CardOnFile $cards): JsonResponse
+    {
+        $current = $cards->current($this->caller($request));
+
+        return ApiResponse::data($current ?? ['gateway' => null, 'has_card' => false]);
+    }
+
+    /**
+     * Replace the card on file.
+     *
+     * Takes a Stripe payment method id created on the device, never a card
+     * number. For a subscriber still on Moneris this is also the migration:
+     * the subscription moves to Stripe in the same statement that hides it
+     * from the old Yii cron, and the Moneris token is left intact so the row
+     * can be handed back.
+     *
+     * Changing a card is a better migration trigger than a renewal, because
+     * the people it moves are already in the app deliberately touching their
+     * payment details — nobody lapses for not noticing a prompt.
+     * App\Services\CardOnFile has the detail.
+     */
+    public function updatePaymentMethod(Request $request, CardOnFile $cards): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'payment_method_id' => ['required', 'string', 'max:255'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        if (! app(PaymentGateway::class)->isConfigured()) {
+            return ApiResponse::error('Payments are not available on this server.', 503);
+        }
+
+        try {
+            $result = $cards->replace(
+                $this->caller($request),
+                (string) $request->input('payment_method_id'),
+            );
+        } catch (PaymentGatewayException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 409);
+        }
+
+        return ApiResponse::data([
+            'card' => [
+                'brand' => $result['card']->brand,
+                'last4' => $result['card']->last4,
+                'expiry' => $result['card']->expiry(),
+            ],
+            // True when this call moved the account off Moneris, so the app
+            // can tell the customer their renewals have moved.
+            'moved_to_stripe' => $result['moved'],
+            'subscriptions_updated' => $result['subscriptions'],
+        ]);
     }
 
     /** @return array<string,list<string>> */

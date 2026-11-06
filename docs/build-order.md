@@ -503,13 +503,42 @@ Two behaviours deliberately not carried over:
 through Stripe end to end: buy, renew, refund, dispute. The existing book is
 untouched and still on Moneris, which is phase 2.
 
-**Phase 2 — move the existing book (38h).**
+**Phase 2 — provisionally deferred, 2026-11-06.** The existing book stays on
+Moneris for now and existing renewals keep running there. Suresh is
+confirming this with Mo, so treat it as the working assumption rather than a
+settled one. The card export, the mapping importer and the ramp come
+off the active plan — 30 hours — and
+`docs/moneris-to-stripe-migration.md` holds the plan for when it happens,
+along with what the deferral costs.
+
+The short version of that cost: **retiring the API is not retiring the
+application.** While anyone is billed through Moneris, the Yii renewal cron
+has to keep running — it is a console command, so that part is fine — but so
+does the old **web** card-update page, because
+`controllers/user/SettingsController.php` is the only place a Moneris
+customer can change their card, and it takes a raw card number. That keeps
+the `$_POST` log-dump exposure live *and in use*, which is the one accepted
+risk that gets worse rather than merely longer. The other two — the
+profile-write hole and the photo upload — are API endpoints and still end
+when the API is retired.
+
+**Migration on card change — built.** `POST /v1/user/payment-method` moves a
+subscriber to Stripe when they change their card in the app, which needs no
+export from Moneris and no mapping file. It is a drain rather than a cutover:
+it reduces the Moneris book over time instead of ending it on a date, and
+anyone who never changes their card stays there. It is also what eventually
+removes the reason the old web card page has to stay in service.
 
 ```
-Run the production subscription audit and size the live book — 1h
-Request the card export from Moneris, early: it is the longest pole — 2h
-Migrate the card file: schema, mapping importer, gateway switch, ramp — 27h
 Port the signage payment endpoints in ManageListings — 8h
+```
+
+Deferred, not cancelled:
+
+```
+(deferred) Run the production subscription audit and size the live book — 1h
+(deferred) Request the card export from Moneris — 2h
+(deferred) Migrate the card file: mapping importer, gateway switch, ramp — 27h
 ```
 
 ### Cross-cutting, to schedule alongside
@@ -549,13 +578,13 @@ Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 | 4. Notifications | 0 |
 | 5. Self-contained features | 0 |
 | 6. ManageListings | 0 |
-| 7. Payments | 46 |
+| 7. Payments | 8 |
 | Cross-cutting | 43 |
-| **Total** | **89** |
+| **Total** | **51** |
 
-Payments is 60 of that, and is the part that can be deferred rather than
-removed — those ten endpoints can keep running on the old API after the rest
-has moved, since both read the same database.
+Payments is 8 of that now: phase 1 is built and phase 2 is deferred. The
+deferred migration work is 30 hours and is listed in group 7 so it is not
+lost — it is excluded from the total because it is not on the plan.
 
 Excluding payments and cross-cutting: **0 hours** — every endpoint the new
 app needs apart from paying for things is built. What is left is the
@@ -563,14 +592,15 @@ payment group and the cross-cutting work.
 
 ## What is already done
 
-**93 endpoints.** Token middleware, all thirteen Listings endpoints, all
+**95 endpoints.** Token middleware, all thirteen Listings endpoints, all
 sixteen Requests endpoints, all ten Notifications endpoints, the fourteen in
 the user, settings and security group, the fifteen in hunters tags, chat and
 reference data, the eighteen non-payment ManageListings endpoints, and the
-six that make up phase 1 of the payment work: subscribe, apply-promocode, the
-three product subscriptions and the Stripe webhook.
+eight that make up phase 1 of the payment work: subscribe, apply-promocode,
+the three product subscriptions, the Stripe webhook, and the card-on-file pair
+that migrates a subscriber off Moneris when they change their card.
 
-Interactive documentation at `/docs` covers every one of them, with 217 tests
+Interactive documentation at `/docs` covers every one of them, with 228 tests
 and seven enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 

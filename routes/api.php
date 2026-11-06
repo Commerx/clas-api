@@ -161,6 +161,16 @@ Route::prefix('v1')->group(function () {
          * and cc_cvv as POST parameters. apply-promocode only quotes a
          * price; it consumes nothing.
          */
+        /*
+         * The card on file. Changing it is also the migration: a subscriber
+         * still on Moneris moves to Stripe here, because the people who
+         * change a card are already in the app doing it deliberately —
+         * nobody lapses for not noticing a prompt.
+         */
+        Route::get('user/payment-method', [UserController::class, 'paymentMethod']);
+        Route::post('user/payment-method', [UserController::class, 'updatePaymentMethod'])
+            ->middleware('throttle:10,1');
+
         Route::post('user/apply-promocode', [UserController::class, 'applyPromocode']);
         Route::post('user/subscribe', [UserController::class, 'subscribe'])
             ->middleware('throttle:10,1');

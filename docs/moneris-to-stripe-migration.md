@@ -6,7 +6,9 @@ hands back a file mapping every Moneris identifier to the Stripe one that
 replaced it. The subscriptions keep running; what changes is which gateway
 charges them.
 
-This document is the plan for moving the existing book, which is phase 2.
+**Phase 2 is provisionally deferred as of 2026-11-06**, pending confirmation
+with Mo — see the section immediately below for what the deferral costs. This
+document remains the plan for moving the existing book when it happens.
 Phase 1 — Stripe for new customers while Moneris keeps the existing ones — is
 the section immediately below, and it has a trap in it that phase 1 has to
 handle rather than phase 2.
@@ -18,6 +20,128 @@ tables are stale, and they were wrong in the direction that mattered most.
 Nothing here depends on them. `docs/sql/production-subscription-audit.sql`
 gets the real numbers — read only, seven sections, verified to run clean — and
 three decisions below need its output before they can be made.
+
+## Deferred, provisionally — 2026-11-06
+
+**The existing book stays on Moneris for now, and existing renewals keep
+running there.** No card export, no mapping, no ramp.
+
+**This is provisional: Suresh is confirming it with Mo.** Nothing in phase 1
+depends on the answer — new customers are on Stripe either way, and the
+coexistence guard is the same whether the overlap lasts weeks or years — so
+the confirmation gates only whether phase 2 restarts, not anything already
+built. What it does change is how long the costs below are carried, which is
+why they are worth reading before the conversation rather than after.
+
+Everything below about phase 2 is still the plan for when it happens, and the
+questions for Moneris and Stripe are still the right questions. What follows
+here is what the deferral costs, because it is not nothing and some of it
+touches decisions already taken on the opposite assumption.
+
+### The old application cannot be fully retired
+
+The plan of record is that the old API is retired one to two weeks after the
+forced app update. That still works — but **retiring the API is not retiring
+the application**, and while any customer is billed through Moneris these
+have to keep running:
+
+- **The renewal cron.** `commands/PaymentsController.php` is a console
+  command, not an endpoint, so it can outlive the API. It needs the Yii
+  codebase, its database access, its Moneris credentials and its mail
+  configuration all alive and working.
+- **The web card-update path.** This is the one that is easy to miss. A
+  customer on Moneris who needs to change their card can only do it where
+  their card is held, and the only place that exists is the old web
+  application — `controllers/user/SettingsController.php`, which calls
+  `res_add_cc` in two places. That page takes a raw card number.
+
+So "keep them on Moneris" means keeping a raw-card-entry page in service for
+as long as the arrangement lasts, not just a cron.
+
+### Which means three accepted risks need re-examining
+
+Each of these was accepted on the basis that the exposure window was short.
+If the old application is in service indefinitely, that basis is gone. None
+of them is urgent today; all three are worth re-deciding rather than
+inheriting.
+
+1. **The `$_POST` log dump, with raw card entry still in use.** This is the
+   one that gets materially worse rather than merely longer. The card-update
+   page takes a PAN and CVV; Yii's error handler writes the whole `$_POST`
+   body on any logged error or warning; one full card number and CVV is
+   already sitting in `app.log.1` from a Swiftmailer exception. Keeping that
+   page in service keeps new card data flowing through the path that produced
+   it. `docs/payments-decision.md` has the detail. The fix is one line —
+   setting `logVars` — and it was declined when the window was short.
+2. **The unauthenticated profile-write hole.** Any caller can overwrite any
+   user's name, address, phone, driver's licence and guide number. Fixed in
+   v1; live in the old API for as long as that API is served.
+3. **The photo upload file write.** A caller chooses the extension of a file
+   placed in a web-served directory, which on this configuration is remote
+   code execution. Also fixed in v1 only.
+
+Note that 2 and 3 are *API* endpoints, so they do end when the API is retired
+— they are only extended if the API's retirement slips too. 1 is a *web*
+page, so it lasts as long as Moneris customers do.
+
+### And the coexistence invariant has to hold much longer
+
+Phase 1's guard — every row this API creates carries `auto_renew = 0`, and the
+old cron keeps filtering `auto_renew = 1` — was designed for an overlap of
+weeks. It now has to hold for however long this lasts. The guard itself is
+unchanged and still correct; what changes is that "if anyone touches that
+cron, re-check this" stops being a short-term caution.
+
+### The path actually chosen: migrate on card change — BUILT
+
+Suresh, 2026-11-06: *"to change card, i would prefer the users to use the
+mobile app and that should move them to stripe if that works."*
+
+It works, and it is better than the renewal-triggered version I had sketched
+here, for one reason: **the people it moves are already in the app,
+deliberately touching their payment details.** Nobody lapses for not having
+noticed a prompt, which is what migrating at renewal time costs.
+
+`POST /v1/user/payment-method` takes a Stripe payment method id created on
+the device and, for a subscriber still on Moneris, performs the migration:
+
+- `gateway = 'stripe'` and `auto_renew = 0` are set **in one statement** —
+  the first makes this application's scheduler own the row, the second hides
+  it from the Yii cron, and doing both together means there is no instant
+  where both own it or neither does;
+- `data_key` is left exactly as it was, so the Moneris token stays valid and
+  handing a row back is setting two columns;
+- the add-on rows are kept consistent, though nothing renews them in either
+  application.
+
+`GET /v1/user/payment-method` reports which processor currently holds the
+card, so the app can tell a Moneris subscriber that changing it will move
+their renewals.
+
+What this gets, compared with the export:
+
+- **No card export to negotiate with Moneris**, no mapping file, nothing to
+  verify, and no PCI data through a CLAS server at any point.
+- **No new-merchant-id decline spike.** Each card is entered fresh rather than
+  migrated, spread over however long it takes, so there is no cohort hitting a
+  cold MID at once.
+- **Reversible one row at a time**, for as long as the Moneris account is open.
+- **It removes the reason the old web card page has to stay.** Once a
+  subscriber has changed their card in the app they are on Stripe, and the
+  only thing keeping `controllers/user/SettingsController.php` in service is
+  the subscribers who have not. That is the path by which the old application
+  eventually retires without an export.
+
+What it does not do: move anybody who never changes their card. Those renew on
+Moneris until they lapse or until a decision is taken to migrate them. So this
+is a drain, not a cutover — it reduces the Moneris book over time rather than
+ending it on a date. If an end date is ever needed, the export is still the
+way, and the rest of this document is still the plan.
+
+Eleven tests cover the handover, including that the old cron's own filter no
+longer selects a moved row, that this application's scheduler does, that the
+two never both own it, and that a row the old cron already attempted today is
+not charged again the same day.
 
 ## Phase 1: Stripe for new customers, Moneris for the existing book
 

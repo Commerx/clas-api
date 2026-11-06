@@ -2800,6 +2800,74 @@ MD;
                     503 => 'This server has no usable Stripe key configured.',
                 ]),
             ]],
+
+            '/v1/user/payment-method' => [
+                'get' => [
+                    'tags' => ['Security'],
+                    'summary' => 'Which processor holds the card',
+                    'description' => 'So the app can say what changing the card will do. A '
+                        .'subscriber still on Moneris gets gateway "moneris", which is the cue '
+                        .'that replacing their card also moves their renewals to Stripe.',
+                    'responses' => self::ok('What is on file.', [
+                        'type' => 'object',
+                        'properties' => [
+                            'gateway' => ['type' => 'string', 'nullable' => true,
+                                'enum' => ['moneris', 'stripe', null],
+                                'description' => 'Null when there is no active subscription.'],
+                            'has_card' => ['type' => 'boolean'],
+                        ],
+                    ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+                ],
+                'post' => [
+                    'tags' => ['Security'],
+                    'summary' => 'Replace the card, and move to Stripe',
+                    'description' => 'Takes a Stripe payment method id created on the device, '
+                        .'never a card number. '
+                        .'For a subscriber still on Moneris this is the migration: the '
+                        .'subscription is set to gateway stripe and auto_renew 0 in one '
+                        .'statement — the first makes this APIs scheduler own it, the second '
+                        .'hides it from the old Yii cron, and doing both together means there is '
+                        .'no instant where both or neither owns the row. The Moneris data_key is '
+                        .'left intact, so handing the row back is setting two columns. '
+                        .'Changing a card is a better migration trigger than a renewal, because '
+                        .'the people it moves are already in the app touching their payment '
+                        .'details deliberately; nobody lapses for not noticing a prompt, which '
+                        .'is what migrating at renewal time costs. It also needs no card export '
+                        .'from Moneris and no mapping file. '
+                        .'Only the property-access subscription moves. The three add-on tables '
+                        .'carry the same columns and are kept consistent, but nothing renews them '
+                        .'in either application.',
+                    'requestBody' => self::formBody(
+                        ['payment_method_id' => 'Required. A Stripe payment method id.'],
+                        ['payment_method_id'],
+                    ),
+                    'responses' => self::ok('The card on file.', [
+                        'type' => 'object',
+                        'properties' => [
+                            'card' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'brand' => ['type' => 'string', 'nullable' => true],
+                                    'last4' => ['type' => 'string', 'nullable' => true],
+                                    'expiry' => ['type' => 'string', 'nullable' => true,
+                                        'description' => 'MM/YYYY.'],
+                                ],
+                            ],
+                            'moved_to_stripe' => ['type' => 'boolean',
+                                'description' => 'True when this call moved the account off '
+                                    .'Moneris, so the app can tell the customer their renewals '
+                                    .'have moved.'],
+                            'subscriptions_updated' => ['type' => 'integer'],
+                        ],
+                    ]) + self::failures([
+                        401 => 'Missing, unknown or mismatched token.',
+                        409 => 'No payment method supplied.',
+                        422 => 'The card could not be saved.',
+                        429 => 'Too many attempts from this address.',
+                        503 => 'This server has no usable Stripe key configured.',
+                    ]),
+                ],
+            ],
         ];
     }
 }
