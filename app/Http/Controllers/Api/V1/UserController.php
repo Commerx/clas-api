@@ -7,7 +7,10 @@ use App\Http\Controllers\Controller;
 use App\Mail\IssueReported;
 use App\Models\Profile;
 use App\Models\User;
+use App\Services\Payments\PaymentGateway;
+use App\Services\Payments\PaymentGatewayException;
 use App\Services\Registration;
+use App\Services\SubscriptionPurchase;
 use App\Support\V1\AccountPayload;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,6 +18,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 /**
  * Rebuild of modules/api/controllers/v7/UserController.php.
@@ -340,6 +344,110 @@ class UserController extends Controller
         $profile->save();
 
         return ApiResponse::data(AccountPayload::withProfile($this->caller($request)->fresh()));
+    }
+
+    /**
+     * What a subscription costs, with a promo code applied.
+     *
+     * A read: no code is consumed and nothing is charged, so the app can
+     * show a total before the customer commits. The old endpoint behaved the
+     * same way, but its discount calculation gave 100% off for any code
+     * present in `promo_codes` regardless of the code's type — see
+     * App\Services\Payments\Promocodes.
+     */
+    public function applyPromocode(Request $request, SubscriptionPurchase $purchase): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'promo_code' => ['required', 'string', 'max:32'],
+            'subscription_type' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        $type = (int) $request->input('subscription_type');
+
+        if (! array_key_exists($type, (array) config('clas.subscriptions.types'))) {
+            return ApiResponse::invalid([
+                'subscription_type' => ['That subscription type does not exist.'],
+            ]);
+        }
+
+        $discount = $purchase->quote($type, (string) $request->input('promo_code'));
+
+        if (! $discount->wasApplied()) {
+            return ApiResponse::error('That promo code is not valid.', 422);
+        }
+
+        return ApiResponse::data($discount->toArray());
+    }
+
+    /**
+     * Buy a property-access subscription.
+     *
+     * Takes a Stripe payment method id created on the device, never a card
+     * number — the old endpoint took `cc_number`, `cc_expiry` and `cc_cvv` as
+     * POST parameters, which is what puts that application in PCI DSS SAQ D
+     * scope. `payment_method_id` is only required when there is something to
+     * pay: a code worth 100% needs no card.
+     *
+     * The subscription is written with `auto_renew = 0` and
+     * `gateway = 'stripe'`, which is what keeps the old Yii renewal cron off
+     * it; docs/moneris-to-stripe-migration.md explains why that matters.
+     */
+    public function subscribe(Request $request, SubscriptionPurchase $purchase): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'subscription_type' => ['required', 'integer'],
+            'payment_method_id' => ['nullable', 'string', 'max:255'],
+            'promo_code' => ['nullable', 'string', 'max:32'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        if (! app(PaymentGateway::class)->isConfigured()) {
+            // No usable key, or a key this deployment refuses — see
+            // config/services.php. Saying so beats a gateway error.
+            return ApiResponse::error('Payments are not available on this server.', 503);
+        }
+
+        $type = (int) $request->input('subscription_type');
+
+        if (! array_key_exists($type, (array) config('clas.subscriptions.types'))) {
+            return ApiResponse::invalid([
+                'subscription_type' => ['That subscription type does not exist.'],
+            ]);
+        }
+
+        if (! config('clas.subscriptions.types.'.$type.'.sold')) {
+            return ApiResponse::error('That subscription is no longer offered.', 409);
+        }
+
+        try {
+            $result = $purchase->buy(
+                user: $this->caller($request),
+                type: $type,
+                code: (string) $request->input('promo_code', ''),
+                paymentMethodId: (string) $request->input('payment_method_id', ''),
+            );
+        } catch (PaymentGatewayException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 409);
+        }
+
+        return ApiResponse::data([
+            'subscription_id' => $result['subscription_id'],
+            'amount_paid' => $result['discount']->total,
+            'discount' => $result['discount']->wasApplied()
+                ? $result['discount']->toArray()
+                : null,
+            'reference' => $result['payment']?->reference,
+            'account' => AccountPayload::withProfile($this->caller($request)->fresh()),
+        ], 201);
     }
 
     /** @return array<string,list<string>> */

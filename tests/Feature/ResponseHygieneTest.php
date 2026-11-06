@@ -68,6 +68,7 @@ class ResponseHygieneTest extends TestCase
         'v1/security/forgot-password',      // the caller cannot sign in
         'v1/user/signup',                   // no account yet
         'v1/user/send-confirmation-code',   // reached from the sign-in screen
+        'v1/stripe/webhook',                // Stripe signs it; it has no token to give
     ];
 
     /**
@@ -334,6 +335,54 @@ class ResponseHygieneTest extends TestCase
                 fn ($file) => $file->getExtension() === 'php',
             )
         );
+    }
+
+    /**
+     * No card details ever reach this application.
+     *
+     * The old API's `user/subscribe` took `cc_number`, `cc_expiry` and
+     * `cc_cvv` as POST parameters and forwarded them to Moneris. That is what
+     * puts an application in PCI DSS SAQ D scope, and it is how one full card
+     * number and CVV came to be written into the production log by Yii's
+     * error handler dumping $_POST. Here a payment method is created on the
+     * device by Stripe's SDK and arrives as an opaque id.
+     *
+     * This rule is why the whole payment path was rebuilt rather than ported,
+     * so it is enforced rather than remembered.
+     */
+    public function test_nothing_reads_card_details_from_a_request(): void
+    {
+        $offenders = [];
+        $checked = 0;
+
+        $cardFields = [
+            'cc_number', 'cc_expiry', 'cc_cvv', 'cc_name',
+            'card_number', 'cardnumber', 'cvv', 'cvc', 'expdate', 'pan',
+        ];
+
+        foreach (array_merge($this->controllerFiles(), $this->sourceFiles()) as $path) {
+            $checked++;
+            $source = File::get($path);
+
+            foreach ($cardFields as $field) {
+                $pattern = sprintf(
+                    '/(?:input|post|get|query|has|filled)\s*\(\s*[\x27\x22]%s[\x27\x22]/',
+                    preg_quote($field, '/'),
+                );
+
+                if (preg_match($pattern, $source)) {
+                    $offenders[] = basename($path).": reads '{$field}' from the request";
+                }
+            }
+        }
+
+        $this->assertGreaterThan(0, $checked, 'No source files were checked.');
+
+        $this->assertSame([], $offenders, implode(PHP_EOL, array_merge(
+            ['Card details must never reach this application.'],
+            ['Take a gateway payment method id from the device instead.'],
+            $offenders,
+        )));
     }
 
     /** @return list<string> */

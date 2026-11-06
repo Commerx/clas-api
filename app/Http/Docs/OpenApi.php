@@ -2555,6 +2555,251 @@ MD;
                     422 => 'Validation failed; see errors.',
                 ]),
             ]],
+
+            '/v1/user/apply-promocode' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'What a promo code is worth',
+                'description' => 'Quotes a price. Nothing is charged and no code is consumed, so '
+                    .'this can be called as the customer types. Two changes from the old '
+                    .'endpoint, both of which the live data shows were exercised: '
+                    .'promo_codes.type is now honoured, where any code in that table previously '
+                    .'gave 100% off — 300 annual50 codes were granting a free year instead of '
+                    .'half off; and a single-use code that has already been redeemed is now '
+                    .'refused, where before `used` was incremented and never read. One code '
+                    .'named onetime had been redeemed 28 times.',
+                'requestBody' => self::formBody([
+                    'promo_code' => 'Required.',
+                    'subscription_type' => 'Required. See security/login for the types on offer.',
+                ], ['promo_code', 'subscription_type']),
+                'responses' => self::ok('What the code is worth.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'code' => ['type' => 'string'],
+                        'rate' => ['type' => 'integer', 'description' => 'Percentage off.'],
+                        'subscription_amount' => ['type' => 'string', 'description' => 'Before the discount.'],
+                        'discount' => ['type' => 'string'],
+                        'final_total' => ['type' => 'string', 'description' => 'What would be charged.'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    422 => 'Validation failed, or the code is not valid.',
+                ]),
+            ]],
+
+            '/v1/user/subscribe' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Buy a property-access subscription',
+                'description' => 'Takes a Stripe payment method id created on the device by '
+                    .'Stripes own SDK. It does not take a card number: the old endpoint took '
+                    .'cc_number, cc_expiry and cc_cvv as POST parameters and forwarded them to '
+                    .'Moneris, which is what puts that application in PCI DSS SAQ D scope. '
+                    .'payment_method_id is only required when there is something to pay, so a '
+                    .'code worth 100% needs no card. '
+                    .'The subscription includes a free year of WMU and fishing-lands access, as '
+                    .'it always has — that is why those tables hold hundreds of rows and almost '
+                    .'no payments. '
+                    .'Charges carry an idempotency key built from the account, product and day, '
+                    .'so a retry after a timeout returns the original charge instead of taking '
+                    .'the money twice; the old code put time() in its order id, which guaranteed '
+                    .'the opposite. '
+                    .'Rate limited per IP.',
+                'requestBody' => self::formBody([
+                    'subscription_type' => 'Required. Must be one still offered.',
+                    'payment_method_id' => 'A Stripe payment method id. Required unless the total is zero.',
+                    'promo_code' => 'Optional.',
+                ], ['subscription_type']),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Subscribed.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'subscription_id' => ['type' => 'integer'],
+                                        'amount_paid' => ['type' => 'string'],
+                                        'discount' => ['type' => 'object', 'nullable' => true],
+                                        'reference' => ['type' => 'string', 'nullable' => true,
+                                            'description' => 'The Stripe payment intent, or null '
+                                                .'when nothing was charged.'],
+                                        'account' => self::account(withProfile: true),
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'Already subscribed, the type is no longer offered, or the card was declined.',
+                    422 => 'Validation failed, the code is not valid, or the card could not be saved.',
+                    429 => 'Too many attempts from this address.',
+                    503 => 'This server has no usable Stripe key configured.',
+                ]),
+            ]],
+
+            '/v1/stripe/webhook' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Stripe callbacks',
+                'description' => 'Not for the app. Stripe posts here to report what happened '
+                    .'after a request returned: a refund issued from the dashboard, a '
+                    .'chargeback, a payment that settled late. The old integration read the '
+                    .'synchronous response to its own request and nothing else, so refunding a '
+                    .'customer in the processors dashboard left the subscription marked Active '
+                    .'and paid and nobody found out. '
+                    .'The only endpoint in this API without a token, because Stripe has none to '
+                    .'give: the Stripe-Signature header is the authentication. With no signing '
+                    .'secret configured the endpoint refuses everything with 503 rather than '
+                    .'accepting unsigned payloads — Stripe retries a 5xx, so nothing is lost '
+                    .'while the secret is still being set up. '
+                    .'Every event id is recorded, so a redelivery is acknowledged without being '
+                    .'acted on twice. '
+                    .'A full refund revokes the subscription and its add-ons; a partial refund '
+                    .'is recorded and left alone, because it could be goodwill, a correction or '
+                    .'a proration and guessing would be worse. A dispute is logged as critical '
+                    .'and revokes nothing: it can be won, the response deadline is short, and '
+                    .'the record of use is often what wins it.',
+                'security' => [],
+                'parameters' => [
+                    [
+                        'name' => 'Stripe-Signature',
+                        'in' => 'header',
+                        'required' => true,
+                        'description' => 'Stripes signature over the raw request body.',
+                        'schema' => ['type' => 'string'],
+                    ],
+                ],
+                'requestBody' => [
+                    'required' => true,
+                    'description' => 'The Stripe event, exactly as sent. The raw bytes are what '
+                        .'the signature covers, so nothing may re-encode them.',
+                    'content' => ['application/json' => ['schema' => ['type' => 'object']]],
+                ],
+                'responses' => self::ok('Acknowledged.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'received' => ['type' => 'boolean'],
+                        'outcome' => [
+                            'type' => 'string',
+                            'description' => 'What was done: subscription_revoked, '
+                                .'partial_refund_noted, dispute_logged, failure_noted, noted, '
+                                .'duplicate, or ignored for an event type this API does not act '
+                                .'on.',
+                        ],
+                    ],
+                ]) + self::failures([
+                    400 => 'The signature did not verify, or the body could not be parsed. '
+                        .'Not retried: it will not become valid.',
+                    503 => 'No signing secret configured on this server. Stripe will retry.',
+                ]),
+            ]],
+
+            '/v1/wmu-subscription/subscribe' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Buy a WMU layer subscription',
+                'description' => 'Buys this product on its own. A year of it already comes free with a property-access subscription, so this is for buying it separately or renewing after that year. Takes a Stripe payment method id created on the device, never a card number. The three products were three near-identical controllers of around 350 lines each in the old API; they are one code path here, over config/clas.php.'
+                    .'Note that wmu_province is not set: the old endpoint never set it either — 817 rows are null — and the price list has per-province keys the API never read, always charging the annual rate.',
+                'requestBody' => self::formBody(
+                    ['payment_method_id' => 'Required. A Stripe payment method id.'],
+                    ['payment_method_id'],
+                ),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Subscribed.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'subscription_id' => ['type' => 'integer'],
+                                        'amount' => ['type' => 'string'],
+                                        'reference' => ['type' => 'string',
+                                            'description' => 'The Stripe payment intent.'],
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'Already subscribed to this product, or the card was declined.',
+                    422 => 'payment_method_id missing, or the card could not be saved.',
+                    429 => 'Too many attempts from this address.',
+                    503 => 'This server has no usable Stripe key configured.',
+                ]),
+            ]],
+
+            '/v1/dark-mode-subscription/subscribe' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Buy a dark mode / privacy subscription',
+                'description' => 'Buys this product on its own. A year of it already comes free with a property-access subscription, so this is for buying it separately or renewing after that year. Takes a Stripe payment method id created on the device, never a card number. The three products were three near-identical controllers of around 350 lines each in the old API; they are one code path here, over config/clas.php.'
+                    .'This is what allows a listing to be private or inactive; see manage-listings/update-description.',
+                'requestBody' => self::formBody(
+                    ['payment_method_id' => 'Required. A Stripe payment method id.'],
+                    ['payment_method_id'],
+                ),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Subscribed.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'subscription_id' => ['type' => 'integer'],
+                                        'amount' => ['type' => 'string'],
+                                        'reference' => ['type' => 'string',
+                                            'description' => 'The Stripe payment intent.'],
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'Already subscribed to this product, or the card was declined.',
+                    422 => 'payment_method_id missing, or the card could not be saved.',
+                    429 => 'Too many attempts from this address.',
+                    503 => 'This server has no usable Stripe key configured.',
+                ]),
+            ]],
+
+            '/v1/fishing-lands-subscription/subscribe' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Buy a fishing lands regulations subscription',
+                'description' => 'Buys this product on its own. A year of it already comes free with a property-access subscription, so this is for buying it separately or renewing after that year. Takes a Stripe payment method id created on the device, never a card number. The three products were three near-identical controllers of around 350 lines each in the old API; they are one code path here, over config/clas.php.',
+                'requestBody' => self::formBody(
+                    ['payment_method_id' => 'Required. A Stripe payment method id.'],
+                    ['payment_method_id'],
+                ),
+                'responses' => [
+                    '201' => [
+                        'description' => 'Subscribed.',
+                        'content' => ['application/json' => ['schema' => [
+                            'allOf' => [
+                                ['$ref' => '#/components/schemas/Envelope'],
+                                ['type' => 'object', 'properties' => ['data' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'subscription_id' => ['type' => 'integer'],
+                                        'amount' => ['type' => 'string'],
+                                        'reference' => ['type' => 'string',
+                                            'description' => 'The Stripe payment intent.'],
+                                    ],
+                                ]]],
+                            ],
+                        ]]],
+                    ],
+                ] + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'Already subscribed to this product, or the card was declined.',
+                    422 => 'payment_method_id missing, or the card could not be saved.',
+                    429 => 'Too many attempts from this address.',
+                    503 => 'This server has no usable Stripe key configured.',
+                ]),
+            ]],
         ];
     }
 }

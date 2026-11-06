@@ -6,8 +6,10 @@ use App\Http\Controllers\Api\V1\HuntersTagsController;
 use App\Http\Controllers\Api\V1\ListingsController;
 use App\Http\Controllers\Api\V1\ManageListingsController;
 use App\Http\Controllers\Api\V1\NotificationsController;
+use App\Http\Controllers\Api\V1\ProductSubscriptionController;
 use App\Http\Controllers\Api\V1\RequestsController;
 use App\Http\Controllers\Api\V1\SecurityController;
+use App\Http\Controllers\Api\V1\StripeWebhookController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserSettingsController;
 use App\Http\Controllers\Api\V1\WmuController;
@@ -53,6 +55,21 @@ Route::prefix('v1')->group(function () {
         Route::post('user/send-confirmation-code', [UserController::class, 'sendConfirmationCode'])
             ->middleware('auth.identify');
     });
+
+    /*
+     * Stripe's callbacks.
+     *
+     * No token, because Stripe cannot present one: the signature in the
+     * Stripe-Signature header is the authentication, and the handler refuses
+     * everything when no signing secret is configured. Listed in
+     * ResponseHygieneTest::PUBLIC_ROUTES, which is what stops a route being
+     * unauthenticated by accident.
+     *
+     * Rate limited generously — Stripe retries, and a burst of events on a
+     * busy day is normal — but limited, because the URL is public.
+     */
+    Route::post('stripe/webhook', StripeWebhookController::class)
+        ->middleware('throttle:120,1');
 
     Route::middleware('auth.token')->group(function () {
         Route::get('notifications/list', [NotificationsController::class, 'index']);
@@ -133,6 +150,34 @@ Route::prefix('v1')->group(function () {
         Route::post('user/account', [UserController::class, 'account']);
         Route::post('user/deactivate', [UserController::class, 'deactivate']);
         Route::post('user/report-issue', [UserController::class, 'reportIssue']);
+
+        /*
+         * Subscriptions. Phase 1 of the Moneris-to-Stripe move: new
+         * customers are charged through Stripe while the Yii application
+         * keeps charging the existing book through Moneris.
+         *
+         * subscribe takes a Stripe payment method id created on the device,
+         * never a card number — the old endpoint took cc_number, cc_expiry
+         * and cc_cvv as POST parameters. apply-promocode only quotes a
+         * price; it consumes nothing.
+         */
+        Route::post('user/apply-promocode', [UserController::class, 'applyPromocode']);
+        Route::post('user/subscribe', [UserController::class, 'subscribe'])
+            ->middleware('throttle:10,1');
+
+        /*
+         * The three add-on products, bought on their own. A year of each
+         * comes free with a property-access subscription, so these are for
+         * buying one separately or renewing after that year.
+         *
+         * Paths kept as the app calls them. One controller for all three;
+         * the old API had three of ~350 lines each.
+         */
+        Route::middleware('throttle:10,1')->group(function () {
+            Route::post('wmu-subscription/subscribe', [ProductSubscriptionController::class, 'wmu']);
+            Route::post('dark-mode-subscription/subscribe', [ProductSubscriptionController::class, 'darkMode']);
+            Route::post('fishing-lands-subscription/subscribe', [ProductSubscriptionController::class, 'fishingLands']);
+        });
 
         Route::get('user-settings/get-notification-settings', [UserSettingsController::class, 'get']);
         Route::post('user-settings/save-notification-settings', [UserSettingsController::class, 'save']);

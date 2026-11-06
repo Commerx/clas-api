@@ -370,17 +370,22 @@ and an earlier version of these notes drew the wrong conclusion from them.
 It runs in two phases, decided 2026-11-05: Stripe takes new customers first,
 Moneris keeps the existing book until it is moved.
 
-**Phase 1 — new customers on Stripe (46h).** Needs a Stripe account and its
-test keys; nothing here needs live keys.
+**Phase 1 — new customers on Stripe — DONE.** Running on the
+marketplace *test* keys, copied once into `.env`. A live key is refused by
+`StripeGateway::isConfigured()` unless `STRIPE_ALLOWED_KEY_PREFIXES` names it,
+so the endpoints report payments unavailable rather than charging real cards
+if the wrong key is pasted in. Verified end to end against Stripe test mode:
+a card attached, charged $9.99 CAD, and the same idempotency key returned the
+original charge instead of a second one.
 
 ```
-Stripe PHP SDK, config, keys and test-mode wiring — 3h
-Payment service interface with one implementation, Stripe — 8h
+Stripe PHP SDK, config, keys and test-mode wiring — DONE
+Payment service interface with one implementation, Stripe — DONE
 The gateway columns on the five subscription tables, plus rollback — 2h
-user/subscribe on Stripe, taking a payment method id, never a card — 8h
-The WMU, dark mode and fishing lands subscription endpoints — 8h
-Renewal scheduler in v1 for gateway = 'stripe' rows — 6h
-Webhooks for the asynchronous outcomes — 5h
+user/subscribe and user/apply-promocode on Stripe — DONE
+The WMU, dark mode and fishing lands subscription endpoints — DONE
+Renewal scheduler in v1 for gateway = 'stripe' rows — DONE
+Webhooks for the asynchronous outcomes — DONE
 Tests against Stripe test keys, including the coexistence assertion — 6h
 ```
 
@@ -394,6 +399,110 @@ standing invariant — every row this API creates carries `auto_renew = 0`, and
 the cron must keep filtering `auto_renew = 1`. The migration document has
 the reasoning and the failure mode.
 
+Two defects in the promo code logic were fixed on the way, both of which the
+live data shows were exercised:
+
+- **`promo_codes.type` was ignored.** Any code in that table gave 100% off,
+  so all 300 `annual50` codes were granting a free year rather than half off.
+  The type is now honoured, from `config/clas.php:promocodes`. This is a
+  behaviour change for the 298 unused `annual50` codes already in
+  circulation — they become 50% off, which is what the column says they are.
+- **`used` was never read.** It was incremented on redemption and never
+  checked, so every code was unlimited. One code of type `onetime` has been
+  redeemed **28 times**, another 7, two more twice. Single-use types are now
+  refused once spent.
+
+Also worth recording, because it corrects an earlier note here: the WMU and
+fishing-lands tables hold hundreds of rows and almost no approved payments
+because **both subscribe paths have always bundled a free year of each**
+alongside the main subscription, at 0.00 with `txn_number` 'FREE ADD-ON'.
+Those products did not fail to sell; they are add-ons.
+
+The renewal scheduler is `clas:renew-subscriptions`, daily, scoped to
+`gateway = 'stripe'`. Two flaws in the old cron were fixed rather than
+carried over:
+
+- **A missed run lost the renewal.** `canProcessPaymentToday()` returned true
+  on exactly two dates — the expiry, and seven days later — and false on
+  every other day. A cron that did not run on one of those two dates never
+  charged that subscription at all, and the expiry sweep then expired it a
+  week later with nothing distinguishing "declined" from "never attempted".
+  An attempt is now made on any day inside the grace window where one has
+  not already been made, up to the same cap of two.
+- **Attempts are counted from the transaction rows**, not the calendar, so
+  running the command twice in a day cannot produce a third attempt.
+
+Also worth recording: **there is no way to cancel a subscription or turn off
+auto-renewal in either application.** `auto_renew = 0` is only ever set on
+the free-promocode path. So a subscriber's only way to stop renewing is to
+let the card fail. If a cancel path is ever built it needs its own column,
+because `auto_renew` now means "not renewed by the old cron" for Stripe rows.
+
+One bug the renewal tests caught before it could ship: the payment intent had
+`automatic_payment_methods` with redirects disabled, which Stripe refuses to
+combine with `error_on_requires_action`. On-session purchases worked
+throughout; only unattended renewals failed — which is a year after a
+subscription is sold, when nobody would connect it to this change. Intents
+now name `payment_method_types: ['card']` explicitly, and an on-session
+purchase records `setup_future_usage: 'off_session'` so the renewal is not
+the first off-session use of that card.
+
+The webhook endpoint at `POST /v1/stripe/webhook` closes a gap the old
+integration had completely: it read the synchronous response to its own
+request and nothing else, so **a refund issued from the processor's dashboard
+left the subscription marked Active and paid** and nobody found out. Refunds
+and disputes are the events that matter here, because both happen outside the
+application.
+
+Three properties, each with a test proved to fail without it:
+
+- **It fails closed.** With no `STRIPE_WEBHOOK_SECRET` configured, nothing is
+  processed — 503, which Stripe retries, so events arriving before the secret
+  is set are redelivered rather than lost. The signature is the only
+  authentication an unauthenticated endpoint has, and "we have not set the
+  secret yet" is exactly when it would otherwise be an open door.
+- **It is idempotent.** Every event id is recorded in `stripe_events` and a
+  redelivery is acknowledged without being acted on twice.
+- **It verifies the raw body.** Re-encoding parsed JSON changes the bytes —
+  PHP escapes the slashes in values like `/v1/charges`, Stripe does not — so
+  the signature would never verify.
+
+A full refund revokes the subscription and its add-ons. A partial refund is
+recorded and left alone: it could be goodwill, a correction or a proration,
+and guessing would be worse than not guessing. A dispute is logged as
+critical and revokes nothing — it can be won, the response deadline is short,
+and the record of use is often what wins it.
+
+`stripe_events` lives on the `clas_api` connection, not the shared CLAS
+schema: it is entirely this application's bookkeeping, and the connection
+split added for the migrations is what makes that possible without putting
+another table into a database two applications read.
+
+The three add-on products — WMU, dark mode, fishing lands — were three
+controllers of 355, 346 and 346 lines, differing in a table name, a price key
+and the wording of one error message. Everything else was copied between
+them, which is how a fix in one stayed broken in the other two. They are one
+code path over `config/clas.php:subscriptions.products` now, with one test
+body across all three.
+
+Two behaviours deliberately not carried over:
+
+- **The WMU endpoint rewrote the caller's profile.** It took a phone number,
+  split it on dashes, wrote it to the profile, and **refused the entire
+  purchase when it did not split into three parts** — so the subscription
+  could not be bought unless the stored phone happened to be formatted
+  `xxx-xxx-xxxx`. Updating a profile is `user/update-profile`'s job.
+- **`wmu_subscription.wmu_province` is still not set**, as the old endpoint
+  also never set it: 817 rows are NULL, 2 empty, and the 35 with a province
+  came from the web application. The price list has per-province keys the API
+  never read, always charging the annual rate. Rather than invent a meaning,
+  it stays as it was — worth a decision if per-province pricing is ever
+  wanted.
+
+**Phase 1 is complete.** 93 endpoints, 217 tests. New customers are charged
+through Stripe end to end: buy, renew, refund, dispute. The existing book is
+untouched and still on Moneris, which is phase 2.
+
 **Phase 2 — move the existing book (38h).**
 
 ```
@@ -406,9 +515,17 @@ Port the signage payment endpoints in ManageListings — 8h
 ### Cross-cutting, to schedule alongside
 
 ```
-Rotate the four secrets committed in the old repository: the Google timezone
-key, the Moneris store id and API token, the FCM server key and the PEASI
-token — 2h
+Rotate the committed secrets. A sweep of the tracked config files on
+2026-11-06 found **17 distinct secret names across 61 occurrences**, not the
+four previously recorded here. The Stripe live secret key and the AWS key
+pair are the two that matter most: a live `sk_live_` key is full API access to
+the Stripe account, and the AWS pair is identical across dev, staging and
+production. Also: six Slack webhook URLs, the Moneris store id and API token
+for both the main and marketplace accounts, FedEx key and password, three
+database passwords, the mailer password, the reCAPTCHA pair, and a Yii
+`cookieValidationKey` of only 7 characters. All of it is in git history, so
+rotation is the only remedy — removing it from the working tree achieves
+nothing — 8h
 Clear the card data out of the production logs and stop $_POST being logged —
 see docs/payments-decision.md — 2h
 Produce the field-by-field change report for the app developer — 2h
@@ -432,9 +549,9 @@ Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 | 4. Notifications | 0 |
 | 5. Self-contained features | 0 |
 | 6. ManageListings | 0 |
-| 7. Payments | 84 |
-| Cross-cutting | 37 |
-| **Total** | **121** |
+| 7. Payments | 46 |
+| Cross-cutting | 43 |
+| **Total** | **89** |
 
 Payments is 60 of that, and is the part that can be deferred rather than
 removed — those ten endpoints can keep running on the old API after the rest
@@ -446,12 +563,14 @@ payment group and the cross-cutting work.
 
 ## What is already done
 
-**87 endpoints.** Token middleware, all thirteen Listings endpoints, all
+**93 endpoints.** Token middleware, all thirteen Listings endpoints, all
 sixteen Requests endpoints, all ten Notifications endpoints, the fourteen in
 the user, settings and security group, the fifteen in hunters tags, chat and
-reference data, and the eighteen non-payment ManageListings endpoints.
+reference data, the eighteen non-payment ManageListings endpoints, and the
+six that make up phase 1 of the payment work: subscribe, apply-promocode, the
+three product subscriptions and the Stripe webhook.
 
-Interactive documentation at `/docs` covers every one of them, with 161 tests
+Interactive documentation at `/docs` covers every one of them, with 217 tests
 and seven enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 

@@ -72,8 +72,125 @@ return [
             5 => ['name' => 'Annual', 'period' => 'P1Y', 'amount' => '9.99', 'renews' => true, 'sold' => true],
         ],
 
+        /*
+         * What a new property-access subscription includes for free.
+         *
+         * Both the paid and the free path in the old API created a year of
+         * WMU and fishing-lands access alongside the main subscription, at
+         * 0.00 with txn_number 'FREE ADD-ON'. That is why those two tables
+         * hold hundreds of rows and almost no approved payments: they are
+         * mostly add-ons, not a product that never sold.
+         */
+        'free_addons' => [
+            'wmu_subscription' => ['period' => 'P1Y', 'order_prefix' => 'CLAS-WMU-ORDER'],
+            'fishing_lands_subscription' => ['period' => 'P1Y', 'order_prefix' => 'CLAS-FISHING-ORDER'],
+        ],
+
+        /*
+         * Renewals, for the subscriptions this API owns.
+         *
+         * The old cron charged on exactly two days: the expiration date
+         * itself, and seven days later. Any other day it skipped the row
+         * entirely. So a cron that did not run on one of those two dates —
+         * a deploy, a server restart, a failed run — never charged that
+         * subscription at all, and the expiry sweep then expired it a week
+         * later. Nothing recorded that a renewal had been missed rather than
+         * declined.
+         *
+         * Here the grace period is the same seven days and the attempt cap is
+         * the same two, but an attempt happens on any day inside the window
+         * where one has not already been made. A missed run costs a day, not
+         * the renewal.
+         */
+        'renewal' => [
+            'grace_days' => (int) env('RENEWAL_GRACE_DAYS', 7),
+            'max_attempts' => (int) env('RENEWAL_MAX_ATTEMPTS', 2),
+        ],
+
+        /*
+         * The three add-on products, each sold on its own.
+         *
+         * A year of each comes free with a property-access subscription (see
+         * free_addons above); these endpoints are for buying one separately,
+         * or again after the free year has run out.
+         *
+         * All three were near-identical controllers in the old API — 346 to
+         * 355 lines each, differing in the table, the price key and the
+         * error message. One definition here, one code path.
+         */
+        'products' => [
+            'wmu' => [
+                'name' => 'WMU Layer',
+                'table' => 'wmu_subscription',
+                'transactions' => 'wmu_subscription_transactions',
+                'amount' => '4.99',
+                'period' => 'P1Y',
+                'order_prefix' => 'CLAS-WMU-ORDER',
+            ],
+            'dark_mode' => [
+                'name' => 'Dark Mode / Privacy',
+                'table' => 'darkmode_subscription',
+                'transactions' => 'darkmode_subscription_transactions',
+                'amount' => '49.99',
+                'period' => 'P1Y',
+                'order_prefix' => 'CLAS-DARKMODE-ORDER',
+            ],
+            'fishing_lands' => [
+                'name' => 'Fishing Lands Regulations',
+                'table' => 'fishing_lands_subscription',
+                'transactions' => 'fishing_lands_subscription_transactions',
+                'amount' => '4.99',
+                'period' => 'P1Y',
+                'order_prefix' => 'CLAS-FISHING-ORDER',
+            ],
+        ],
+
         /* The type a new property-access subscription is created as. */
         'default_type' => 5,
+    ],
+
+    /*
+     * Promotional codes.
+     *
+     * Two defects in the old implementation, both of which the data shows
+     * were exercised, so both are fixed here:
+     *
+     * **`promo_codes.type` was ignored.** Any code present in the table gave
+     * 100% off. The column has three values — onetime, annual50, sales100 —
+     * and 300 `annual50` codes were therefore granting a free year instead of
+     * half off. `rates` below is what each type means.
+     *
+     * **`used` was never checked.** The old code incremented it and never
+     * read it, so a code could be redeemed without limit. One code named
+     * `onetime` has been used 28 times, another 7, two more twice. `single_use`
+     * is the list of types that may be redeemed once.
+     *
+     * Honouring the type is a behaviour change for codes already in
+     * circulation: 298 unused `annual50` codes become 50% off rather than
+     * free. That is what the column says they are, and the old behaviour was
+     * a mispricing, but it is a change customers could notice.
+     */
+    'promocodes' => [
+        /*
+         * Codes that are not rows in `promo_codes` at all — the old
+         * controller special-cased these three literals. Kept, because they
+         * have been handed out, but as configuration rather than an `if`.
+         */
+        'fixed' => [
+            'ABP20' => 20,
+            'LO20' => 20,
+            'WSG20' => 20,
+        ],
+
+        /* Percentage off, per `promo_codes.type`. */
+        'rates' => [
+            'onetime' => 100,
+            'annual50' => 50,
+            'sales100' => 100,
+        ],
+
+        /* Types that may only be redeemed once. */
+        'single_use' => ['onetime'],
     ],
 
     'prices' => [
