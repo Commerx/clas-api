@@ -8,6 +8,10 @@ use App\Mail\ManagerInvited;
 use App\Models\KeyFeature;
 use App\Models\Rule;
 use App\Services\ListingPhotos;
+use App\Services\Payments\PaymentGateway;
+use App\Services\Payments\PaymentGatewayException;
+use App\Services\SignageOrder;
+use App\Services\SignageShipping;
 use App\Support\V1\FeatureList;
 use App\Support\V1\ListingAccess;
 use App\Support\V1\ManagedListingRow;
@@ -45,9 +49,12 @@ use RuntimeException;
  * ManagedListingRow is the allowlist, and it is what every response here is
  * built from.
  *
- * The signage order and payment endpoints — promocode, add-signages,
- * update-shipping-cost, update-payment — are not here. They move money and
- * belong with the payment work, once the Stripe decision is made.
+ * The signage order and payment endpoints — add-signages, promocode,
+ * update-shipping-cost and update-payment — are here now, on Stripe. The
+ * arithmetic they share lives in App\Services\SignageOrder rather than being
+ * repeated four times, and two things the old versions got wrong are fixed
+ * there: the shipping price came out of a client-supplied string, and an
+ * order could be paid twice.
  */
 class ManageListingsController extends Controller
 {
@@ -548,17 +555,194 @@ class ManageListingsController extends Controller
             return ApiResponse::invalid($validator->errors()->toArray());
         }
 
+        $address = [
+            'street' => (string) $request->input('street'),
+            'city' => (string) $request->input('city'),
+            'province' => (string) $request->input('province'),
+            'country' => (string) $request->input('country'),
+            'postal_code' => (string) $request->input('postal_code'),
+            'phone' => (string) $request->input('phone', ''),
+        ];
+
         // The column holds the whole address as JSON, which is how the old
         // endpoint wrote it and how the web admin reads it.
-        return $this->write($landId, [
-            'signage_shipping_info' => json_encode([
-                'street' => (string) $request->input('street'),
-                'city' => (string) $request->input('city'),
-                'province' => (string) $request->input('province'),
-                'country' => (string) $request->input('country'),
-                'postal_code' => (string) $request->input('postal_code'),
-                'phone' => (string) $request->input('phone', ''),
-            ]),
+        DB::table('land')->where('land_id', $landId)->update([
+            'signage_shipping_info' => json_encode($address),
+
+            // A new address invalidates the chosen method, as before.
+            'signage_shipping_method' => '',
+            'signage_shipping_amount' => 0.00,
+            'total_amount' => 0.00,
+            'updated_at' => time(),
+        ]);
+
+        return $this->listingResponse($landId, extra: [
+            'shipping_options' => app(SignageShipping::class)->options(
+                app(SignageOrder::class)->itemCount($landId),
+                $address,
+            ),
+        ]);
+    }
+
+    // ---- the signage order ---------------------------------------------
+
+    /**
+     * Add signs to the order.
+     *
+     * Quantities are validated rather than merely truthy: the old loop
+     * tested `if ($option && $qty && ...)`, so a negative quantity was added
+     * to the stored one and reduced the order — taking `signage_amount` with
+     * it. Prices come from the catalogue in `config/clas.php`, never from
+     * the request.
+     */
+    public function addSignages(Request $request, SignageOrder $order): JsonResponse
+    {
+        $landId = $this->landId($request, post: true);
+
+        if ($landId instanceof JsonResponse) {
+            return $landId;
+        }
+
+        $validator = Validator::make($request->all(), [
+            'signage_options' => ['required', 'array', 'min:1'],
+            'signage_options.*' => ['required', 'integer'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        try {
+            $order->addSignages(
+                $landId,
+                $this->userId($request),
+                (array) $request->input('signage_options'),
+            );
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        }
+
+        return $this->listingResponse($landId);
+    }
+
+    /**
+     * Price a promo code against the sign order.
+     *
+     * A quote, not a redemption: the code is consumed when the order is
+     * paid, so an owner can try one, change the order and try again. The
+     * code's own `type` decides what it is worth — the old ladder gave 100%
+     * off for any `onetime` row regardless of type, and never marked one
+     * used at all.
+     */
+    public function promocode(Request $request, SignageOrder $order): JsonResponse
+    {
+        $landId = $this->landId($request, post: true);
+
+        if ($landId instanceof JsonResponse) {
+            return $landId;
+        }
+
+        $validator = Validator::make($request->all(), [
+            'code' => ['required', 'string', 'max:32'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        try {
+            $discount = $order->applyPromocode($landId, (string) $request->input('code'));
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        }
+
+        return $this->listingResponse($landId, extra: [
+            'rate' => $discount->rate,
+            'discount' => $discount->toArray(),
+        ]);
+    }
+
+    /**
+     * Choose a shipping method and settle the order total.
+     *
+     * Takes the method, not its price. The old endpoint split a
+     * client-supplied `carrier@@@service@@@amount` string and used the third
+     * part as the shipping charge — which fed `total_amount`, which is what
+     * the payment endpoint charged, so a caller could post `@@@0.00` and
+     * ship for nothing. App\Services\SignageShipping prices it here.
+     */
+    public function updateShippingCost(Request $request, SignageOrder $order): JsonResponse
+    {
+        $landId = $this->landId($request, post: true);
+
+        if ($landId instanceof JsonResponse) {
+            return $landId;
+        }
+
+        $validator = Validator::make($request->all(), [
+            'shipping_method' => ['required', 'string', 'max:100'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        try {
+            $option = $order->chooseShipping($landId, (string) $request->input('shipping_method'));
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        }
+
+        return $this->listingResponse($landId, extra: ['shipping' => $option]);
+    }
+
+    /**
+     * Pay for the signs.
+     *
+     * Takes a Stripe payment method id created on the device, never a card
+     * number — the old endpoint took `cc_number`, `cc_exp_month`,
+     * `cc_exp_year` and `cc_cvv` and forwarded them to Moneris.
+     *
+     * The amount is recomputed from the order rather than read out of
+     * `total_amount`, and a listing already marked Completed is refused:
+     * nothing stopped the old endpoint charging a second time and
+     * overwriting the first receipt.
+     */
+    public function updatePayment(Request $request, SignageOrder $order): JsonResponse
+    {
+        $landId = $this->landId($request, post: true);
+
+        if ($landId instanceof JsonResponse) {
+            return $landId;
+        }
+
+        $validator = Validator::make($request->all(), [
+            'payment_method_id' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        if (! app(PaymentGateway::class)->isConfigured()) {
+            return ApiResponse::error('Payments are not available on this server.', 503);
+        }
+
+        try {
+            $result = $order->pay(
+                user: $this->caller($request),
+                landId: $landId,
+                paymentMethodId: (string) $request->input('payment_method_id', ''),
+            );
+        } catch (PaymentGatewayException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 409);
+        }
+
+        return $this->listingResponse($landId, extra: [
+            'amount_paid' => $result['amount'],
+            'reference' => $result['payment']?->reference,
         ]);
     }
 
@@ -887,7 +1071,12 @@ class ManageListingsController extends Controller
         return $this->listingResponse($landId);
     }
 
-    private function listingResponse(int $landId, int $status = 200): JsonResponse
+    /**
+     * @param  array<string,mixed>  $extra  alongside `item`, for the few
+     *                                      endpoints that answer with more
+     *                                      than the listing
+     */
+    private function listingResponse(int $landId, int $status = 200, array $extra = []): JsonResponse
     {
         $row = DB::table('land')->where('land.land_id', $landId)
             ->first(ManagedListingRow::COLUMNS);
@@ -896,7 +1085,7 @@ class ManageListingsController extends Controller
         $item['signages'] = $this->signages($landId);
         $item['managers'] = $this->managers($landId);
 
-        return ApiResponse::data(['item' => $item], $status);
+        return ApiResponse::data(['item' => $item] + $extra, $status);
     }
 
     /** @return list<array<string,mixed>> */

@@ -111,6 +111,10 @@ class SubscriptionRenewals
             ->join('user as u', 'u.id', '=', 'us.user_id')
             ->where('us.gateway', 'stripe')
             ->where('us.status', 'Active')
+            // Asked not to renew. `auto_renew` cannot carry this for a
+            // Stripe row — it is 0 there by design — so cancellation has its
+            // own column. See App\Services\SubscriptionCancellation.
+            ->whereNull('us.cancelled_at')
             ->whereRaw('us.expiration_date <= CURDATE()')
             ->whereRaw('us.expiration_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)', [$grace])
             ->whereNull('u.blocked_at')

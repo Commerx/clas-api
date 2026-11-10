@@ -213,6 +213,40 @@ is already a precedent for using it this way: the old API sets
 `auto_renew = 0` when a promocode brings a subscription to zero, precisely so
 the cron leaves it alone.
 
+**Two things since then depend on this column meaning what it means here,
+and both are easy to break by "tidying up".**
+
+*Cancellation (2026-11-10).* Because `auto_renew = 0` already means "not
+renewed by the old cron" on a Stripe row, it cannot also mean "the customer
+asked to stop" — a cancelled Stripe subscription would be indistinguishable
+from an ordinary one. Cancellation is therefore `user_subscription.
+cancelled_at`, read by this API's scheduler, and a *Moneris* cancellation
+additionally writes `auto_renew = 0`, since that is the only signal the old
+cron reads.
+
+The sharp edge is **resuming**. Restoring `auto_renew = 1` is right for a
+Moneris row and wrong for a Stripe one: it would hand the row back to an
+application that still holds that customer's `data_key`, and a year later
+they would be charged once by each processor with nothing connecting the two.
+`App\Services\SubscriptionCancellation` restores it only when the row is not
+ours, and a test fails if that condition is removed.
+
+*Reminders (2026-11-10).* `clas:send-renewal-reminders` is the one place this
+API deliberately acts on the Moneris book, because reminding moves no money
+and writes nothing to the shared database — and the Yii reminder has been
+commented out since May 2024, so scoping it to Stripe would have left nearly
+every subscriber without one. That is safe **only while the Yii reminder
+stays off**; `clas.subscriptions.reminder.gateways` is the switch if it ever
+comes back.
+
+So the full set of invariants is now three, not one:
+
+1. every row this API creates carries `auto_renew = 0`, and the old cron
+   keeps filtering `auto_renew = 1`;
+2. `auto_renew` is never set to 1 on a row with `gateway = 'stripe'`;
+3. the Yii `sendExpiryReminder()` stays commented out while this API sends
+   reminders for the Moneris book.
+
 So a Stripe subscription is written with `auto_renew = 0`:
 
 - the old cron ignores it completely — no Moneris charge, no declined email,

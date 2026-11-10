@@ -11,6 +11,7 @@ use App\Services\CardOnFile;
 use App\Services\Payments\PaymentGateway;
 use App\Services\Payments\PaymentGatewayException;
 use App\Services\Registration;
+use App\Services\SubscriptionCancellation;
 use App\Services\SubscriptionPurchase;
 use App\Support\V1\AccountPayload;
 use Illuminate\Http\JsonResponse;
@@ -449,6 +450,70 @@ class UserController extends Controller
             'reference' => $result['payment']?->reference,
             'account' => AccountPayload::withProfile($this->caller($request)->fresh()),
         ], 201);
+    }
+
+    /**
+     * What the caller's subscription is doing.
+     *
+     * Reports `renews` separately from `cancelled`, because they are not
+     * opposites: a legacy plan type, or a row the old cron does not select,
+     * will simply run out without anybody having cancelled it. The app needs
+     * to know whether to say "renews on" or "access ends on".
+     */
+    public function subscriptionStatus(Request $request, SubscriptionCancellation $subscriptions): JsonResponse
+    {
+        $status = $subscriptions->status($this->caller($request));
+
+        return ApiResponse::data($status ?? ['subscription_id' => null, 'renews' => false]);
+    }
+
+    /**
+     * Stop a subscription renewing.
+     *
+     * The first time either application has offered this. Access is not
+     * revoked — the subscription runs to the date already paid for — so this
+     * is a change to what happens next, not a refund.
+     *
+     * What it writes depends on which processor owns the row:
+     * App\Services\SubscriptionCancellation explains why resuming is not the
+     * mirror image of cancelling.
+     */
+    public function cancelSubscription(Request $request, SubscriptionCancellation $subscriptions): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if ($validator->fails()) {
+            return ApiResponse::invalid($validator->errors()->toArray());
+        }
+
+        try {
+            $subscriptions->cancel(
+                $this->caller($request),
+                (string) $request->input('reason', ''),
+            );
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 409);
+        }
+
+        return ApiResponse::data(
+            $subscriptions->status($this->caller($request)) ?? ['subscription_id' => null],
+        );
+    }
+
+    /** Put a cancelled subscription back on renewal, while it is still running. */
+    public function resumeSubscription(Request $request, SubscriptionCancellation $subscriptions): JsonResponse
+    {
+        try {
+            $subscriptions->resume($this->caller($request));
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), 409);
+        }
+
+        return ApiResponse::data(
+            $subscriptions->status($this->caller($request)) ?? ['subscription_id' => null],
+        );
     }
 
     /**

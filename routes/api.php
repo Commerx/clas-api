@@ -176,6 +176,22 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:10,1');
 
         /*
+         * Cancelling, which neither application has ever offered.
+         *
+         * A subscriber's only way to stop renewing was to let their card
+         * fail. The renewal reminder forced the issue: a mail saying "we
+         * will charge your card on the 17th" has to be able to answer
+         * "then don't".
+         *
+         * Cancelling does not revoke access — the subscription runs to the
+         * date already paid for — so these are not refunds and nothing here
+         * touches money.
+         */
+        Route::get('user/subscription', [UserController::class, 'subscriptionStatus']);
+        Route::post('user/cancel-subscription', [UserController::class, 'cancelSubscription']);
+        Route::post('user/resume-subscription', [UserController::class, 'resumeSubscription']);
+
+        /*
          * The three add-on products, bought on their own. A year of each
          * comes free with a property-access subscription, so these are for
          * buying one separately or renewing after that year.
@@ -248,6 +264,21 @@ Route::prefix('v1')->group(function () {
         Route::post('manage-listings/update-signage', [ManageListingsController::class, 'updateSignage']);
         Route::post('manage-listings/delete-signage', [ManageListingsController::class, 'deleteSignage']);
         Route::post('manage-listings/update-shipping-info', [ManageListingsController::class, 'updateShippingInfo']);
+
+        /*
+         * The signage order and its payment.
+         *
+         * update-shipping-cost takes the *method*, not its price: the old
+         * endpoint read the amount out of a string the caller supplied, and
+         * that amount was what update-payment charged. update-payment takes
+         * a Stripe payment method id created on the device, never a card
+         * number.
+         */
+        Route::post('manage-listings/add-signages', [ManageListingsController::class, 'addSignages']);
+        Route::post('manage-listings/promocode', [ManageListingsController::class, 'promocode']);
+        Route::post('manage-listings/update-shipping-cost', [ManageListingsController::class, 'updateShippingCost']);
+        Route::post('manage-listings/update-payment', [ManageListingsController::class, 'updatePayment'])
+            ->middleware('throttle:10,1');
 
         Route::post('manage-listings/publish', [ManageListingsController::class, 'publish']);
         Route::post('manage-listings/unpublish', [ManageListingsController::class, 'unpublish']);

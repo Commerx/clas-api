@@ -38,7 +38,7 @@ class Promocodes
      * apply-promocode endpoint can quote a price without consuming anything.
      * `redeem()` is the separate, deliberate step.
      */
-    public function resolve(string $code, string $amount): ?Discount
+    public function resolve(string $code, string $amount, string $context = 'subscription'): ?Discount
     {
         $code = trim($code);
 
@@ -46,9 +46,22 @@ class Promocodes
             return null;
         }
 
-        // The three literals the old controller special-cased. Matched
-        // case-insensitively, since they are typed by hand off a flyer.
-        foreach ((array) config('clas.promocodes.fixed') as $fixed => $rate) {
+        /*
+         * The literals the old controllers special-cased, matched
+         * case-insensitively since they are typed by hand off a flyer.
+         *
+         * The two checkouts did not accept the same set: signage also took
+         * `FREELISTING` at 100%, subscriptions did not. Keeping them apart
+         * preserves that, rather than widening one code's reach as a side
+         * effect of sharing this method.
+         */
+        $fixedCodes = (array) config('clas.promocodes.fixed');
+
+        if ($context === 'signage') {
+            $fixedCodes += (array) config('clas.promocodes.signage_fixed');
+        }
+
+        foreach ($fixedCodes as $fixed => $rate) {
             if (strcasecmp($code, (string) $fixed) === 0) {
                 return Discount::ofPercentage((string) $fixed, (int) $rate, $amount);
             }

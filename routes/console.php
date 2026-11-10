@@ -25,3 +25,22 @@ Schedule::command('clas:renew-subscriptions')
     ->dailyAt('07:15')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+ * Reminders, an hour after the renewals.
+ *
+ * Later in the morning on purpose: a subscription renewing today is charged
+ * by the run above, and the reminder window starts tomorrow, so by the time
+ * this runs the day's renewals are settled and nobody can receive a "renews
+ * on" notice and a receipt in the same hour.
+ *
+ * Unlike the renewal command this covers the Moneris book as well — the Yii
+ * cron charges those, but its own reminder has been switched off since May
+ * 2024 and this is what puts it back. `clas.subscriptions.reminder.gateways`
+ * has the full note, including what must stay true in the Yii application
+ * for it to be safe.
+ */
+Schedule::command('clas:send-renewal-reminders')
+    ->dailyAt('08:15')
+    ->withoutOverlapping()
+    ->onOneServer();

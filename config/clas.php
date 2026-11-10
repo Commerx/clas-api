@@ -108,6 +108,40 @@ return [
         ],
 
         /*
+         * Telling a subscriber before the card is charged.
+         *
+         * The Yii application has this too, in `sendExpiryReminder()`, and it
+         * has been commented out since 14 May 2024 (commit 7370d58e, "remove
+         * sending expiry reminder emails"). So for two years the first a
+         * subscriber heard of a renewal was the receipt for a charge already
+         * taken, which is what customers have been writing in about.
+         *
+         * `gateways` is why this is not simply the Stripe scheduler's job.
+         * Charging a Moneris row from here would be a disaster — that is what
+         * the `auto_renew = 0` invariant exists to prevent — but *reminding*
+         * one costs nothing and touches no money, so this API can close the
+         * gap for the whole book without a line changing in the frozen Yii
+         * application. Every subscriber on the old gateway gets their notice
+         * from here.
+         *
+         * **That is safe only while the Yii reminder stays switched off.**
+         * Uncommenting line 35 of its `commands/PaymentsController.php` would
+         * have both applications mailing the same people. If it is ever
+         * switched back on, drop 'moneris' from this list — or, better, leave
+         * it off there, since this one knows what it has already sent and
+         * that one does not. docs/moneris-to-stripe-migration.md records the
+         * pair of invariants together.
+         */
+        'reminder' => [
+            'days_before' => (int) env('RENEWAL_REMINDER_DAYS', 7),
+
+            'gateways' => array_values(array_filter(array_map(
+                'trim',
+                explode(',', (string) env('RENEWAL_REMINDER_GATEWAYS', 'stripe,moneris')),
+            ))),
+        ],
+
+        /*
          * The three add-on products, each sold on its own.
          *
          * A year of each comes free with a property-access subscription (see
@@ -191,6 +225,20 @@ return [
 
         /* Types that may only be redeemed once. */
         'single_use' => ['onetime'],
+
+        /*
+         * Fixed codes the *signage* checkout accepted and the subscription
+         * one did not.
+         *
+         * The old `actionPromocode` in ManageListings had its own ladder:
+         * the same three 20% literals, plus `FREELISTING` at 100%. Kept
+         * separate rather than merged into `fixed`, because merging would
+         * quietly make FREELISTING work against subscriptions too, which it
+         * never did.
+         */
+        'signage_fixed' => [
+            'FREELISTING' => 100,
+        ],
     ],
 
     'prices' => [
@@ -214,6 +262,145 @@ return [
         ['id' => 2, 'name' => 'Black Boundary Sign', 'image' => 'signage-black.png', 'price' => 49.99],
         ['id' => 3, 'name' => 'Decals', 'image' => 'decals-sign.png', 'price' => 13.99],
         ['id' => 4, 'name' => 'Large Sign', 'image' => 'large-sign.png', 'price' => 399.99],
+    ],
+
+    /*
+     * Ordering physical signs: how many may be bought, and what shipping
+     * costs.
+     *
+     * **The shipping price is computed here, never accepted from the
+     * caller.** The old `update-shipping-cost` took a string of the form
+     * `Fedex@@@Fedex Ground@@@24.50`, split it on `@@@` and used the third
+     * part as the shipping amount — which then went into `total_amount`,
+     * which is the figure `update-payment` charged. A caller could post
+     * `Fedex@@@Fedex Ground@@@0.00` and pay nothing for shipping, or a
+     * negative amount and reduce the whole order. It also indexed `[2]`
+     * with no check, so a string without separators was a PHP notice and a
+     * shipping cost of zero.
+     *
+     * Here the caller names a method and the price comes from this table.
+     * The stored `signage_shipping_method` keeps the old `@@@` format so the
+     * web admin keeps reading it, but the string is rebuilt from these
+     * values rather than echoed back.
+     */
+    'signage' => [
+        /* Guards against a typo or a hostile quantity becoming an order. */
+        'max_qty_per_option' => (int) env('SIGNAGE_MAX_QTY', 500),
+
+        'shipping' => [
+            /*
+             * Collect in person, at no charge.
+             *
+             * The old shipping component had exactly this line written and
+             * commented out. It is the one rate nobody has to look up, and
+             * without it a deployment with no rate card could not complete
+             * an order at all.
+             */
+            'pickup' => [
+                'enabled' => (bool) env('SIGNAGE_PICKUP', true),
+                'carrier' => 'CUSTOMER_PICKUP',
+                'service' => 'Customer Pickup',
+                'amount' => '0.00',
+            ],
+
+            /*
+             * The carrier rate card. **Empty on purpose.**
+             *
+             * The old application quoted live FedEx rates through their
+             * Rate Service v28 SOAP API — see `calculateSignageShipping()`
+             * in the Yii `GlobalComponent`. That API is FedEx's retired
+             * Web Services interface, its credentials are among the secrets
+             * waiting to be rotated, and it is not ported here.
+             *
+             * Nothing invents a price to stand in for it. An empty table
+             * means the only shipping option offered is pickup, which is
+             * honest; a made-up rate would be a number somebody ships and
+             * then loses money on. Supply the real card here, or reinstate a
+             * live quote behind the same service, before signs can be
+             * posted.
+             *
+             * Each entry:
+             *   code      stable identifier, used by the app
+             *   carrier   what goes in the stored `@@@` string
+             *   service   the name shown to the customer
+             *   base      charged once per order
+             *   per_item  charged for each sign
+             *   provinces optional allowlist of destination provinces
+             *
+             * ---------------------------------------------------------------
+             * **The figures below are derived, not quoted. Confirm one real
+             * FedEx quote against them before go-live.**
+             *
+             * They come from the only shipments in the database that record
+             * both a destination and an amount — all 2023, all FedEx Ground,
+             * from the Lethbridge shipping address the old code used:
+             *
+             *   land 8199   Pincher Creek, AB   5 signs   $155.65  ($31.13 ea)
+             *   land 11242  Drumheller, AB      1 sign     $47.37
+             *   land 11218  Calgary, AB         1 sign     $21.11
+             *   land 11223  Montney, BC         1 sign     $61.60
+             *
+             * Uplifted roughly 19% for three years of FedEx general rate
+             * increases, then rounded up. `base` is zero because the old
+             * quote sent **one package per sign** (2 lb, 10x10x3 in), so the
+             * cost really is close to linear in the sign count — there is no
+             * shared carton to amortise.
+             *
+             * Two things these rates cannot do, and nobody should expect
+             * them to:
+             *
+             * - **A flat card over-charges cities and under-charges the
+             *   bush.** Calgary cost $21 and Drumheller $47 for the same one
+             *   sign, because rural postal codes carry a delivery-area
+             *   surcharge. A single AB number cannot be right for both. These
+             *   are set to cover the rural case, so an urban order pays more
+             *   than it costs. That is a pricing decision, not a measurement.
+             * - **They assume every sign is a small sign.** The old quote
+             *   used 2 lb / 10x10x3 for *every* line, including the $399.99
+             *   Large Sign — so the historical figures understate what a
+             *   large sign actually costs to post, and so do these.
+             *   **Accepted, 2026-11-10:** large signs are rare, so the
+             *   shortfall is not worth a per-item rate. Revisit if they
+             *   start selling — the shape to add is a per-signage-type
+             *   multiplier, since the cost difference is the carton, not
+             *   the destination.
+             * ---------------------------------------------------------------
+             */
+            'rates' => [
+                [
+                    'code' => 'GROUND_AB',
+                    'carrier' => 'Fedex',
+                    'service' => 'FedEx Ground',
+                    'base' => '0.00',
+                    'per_item' => '40.00',
+                    'provinces' => ['AB'],
+                ],
+                [
+                    'code' => 'GROUND_WEST',
+                    'carrier' => 'Fedex',
+                    'service' => 'FedEx Ground',
+                    'base' => '0.00',
+                    'per_item' => '75.00',
+                    'provinces' => ['BC', 'SK'],
+                ],
+                [
+                    'code' => 'GROUND_EAST',
+                    'carrier' => 'Fedex',
+                    'service' => 'FedEx Ground',
+                    'base' => '0.00',
+                    'per_item' => '95.00',
+                    'provinces' => ['MB', 'ON', 'QC', 'NB', 'NS', 'PE', 'NL'],
+                ],
+                [
+                    'code' => 'GROUND_NORTH',
+                    'carrier' => 'Fedex',
+                    'service' => 'FedEx Ground',
+                    'base' => '0.00',
+                    'per_item' => '140.00',
+                    'provinces' => ['YT', 'NT', 'NU'],
+                ],
+            ],
+        ],
     ],
 
     /*

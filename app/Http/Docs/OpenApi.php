@@ -2383,6 +2383,110 @@ MD;
                 ]),
             ]],
 
+            '/v1/manage-listings/add-signages' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Add signs to the order',
+                'description' => 'signage_options is a map of catalogue id to quantity. '
+                    .'Prices come from the server catalogue, never from the request, and '
+                    .'quantities are validated rather than merely truthy: the old loop tested '
+                    .'if ($option && $qty), so a negative quantity was added to the stored one '
+                    .'and reduced the order. Adding signs clears any promo code and shipping '
+                    .'choice, because both are priced off the order total.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'signage_options' => 'Required. Map of signage option id to quantity, '
+                        .'each between 1 and the configured maximum.',
+                ], ['id', 'signage_options']),
+                'responses' => self::ok('The listing.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'Unknown sign, or a quantity out of range.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/promocode' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Price a promo code against the sign order',
+                'description' => 'A quote: the code is consumed when the order is paid, so it '
+                    .'can be tried, changed and tried again. The codes own type decides what it '
+                    .'is worth — the old version gave 100% off for any onetime row whatever its '
+                    .'type said, and never marked one used at all, so a single-use code worked '
+                    .'on every listing for ever.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'code' => 'Required.',
+                ], ['id', 'code']),
+                'responses' => self::ok('The listing, with what the code is worth.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'item' => ['$ref' => '#/components/schemas/ManagedListing'],
+                        'rate' => ['type' => 'integer', 'description' => 'Percentage off.'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'No signs ordered yet, or the code is not valid.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-shipping-cost' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Choose a shipping method',
+                'description' => 'Takes the method, not its price. The old endpoint split a '
+                    .'caller-supplied carrier@@@service@@@amount string and used the third part '
+                    .'as the shipping charge, which fed total_amount, which is the figure the '
+                    .'payment endpoint charged — so posting @@@0.00 shipped for nothing. '
+                    .'shipping_method may be the option code or the whole string, but the '
+                    .'string has to match one the server would have produced. '
+                    .'Available options come back from update-shipping-info.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'shipping_method' => 'Required. An option code, or its full key.',
+                ], ['id', 'shipping_method']),
+                'responses' => self::ok('The listing, with the chosen option.', [
+                    'type' => 'object',
+                    'properties' => ['item' => ['$ref' => '#/components/schemas/ManagedListing']],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    422 => 'No signs ordered yet, or that option is not on offer.',
+                ]),
+            ]],
+
+            '/v1/manage-listings/update-payment' => ['post' => [
+                'tags' => ['Manage listings'],
+                'summary' => 'Pay for the signs',
+                'description' => 'Takes a Stripe payment method id created on the device. It '
+                    .'does not take a card number: the old endpoint took cc_number, '
+                    .'cc_exp_month, cc_exp_year and cc_cvv and forwarded them to Moneris. '
+                    .'payment_method_id is only required when there is something to pay. '
+                    .'The amount is recomputed from the order rather than read out of '
+                    .'total_amount, and a listing already marked Completed is refused — '
+                    .'nothing stopped the old endpoint charging again and overwriting the '
+                    .'first receipt. Rate limited per IP.',
+                'requestBody' => self::formBody([
+                    'id' => 'Required. A listing you manage.',
+                    'payment_method_id' => 'Required unless the total is zero.',
+                ], ['id']),
+                'responses' => self::ok('The listing, paid.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'item' => ['$ref' => '#/components/schemas/ManagedListing'],
+                        'amount_paid' => ['type' => 'string'],
+                        'reference' => ['type' => 'string', 'nullable' => true],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    404 => 'No such listing, or you do not manage it.',
+                    409 => 'Already paid, or the order is not ready to pay for.',
+                    422 => 'The card was declined.',
+                    503 => 'Payments are not configured on this server.',
+                ]),
+            ]],
+
             '/v1/manage-listings/publish' => ['post' => [
                 'tags' => ['Manage listings'],
                 'summary' => 'Make a listing visible',
@@ -2583,6 +2687,75 @@ MD;
                 ]) + self::failures([
                     401 => 'Missing, unknown or mismatched token.',
                     422 => 'Validation failed, or the code is not valid.',
+                ]),
+            ]],
+
+            '/v1/user/subscription' => ['get' => [
+                'tags' => ['Security'],
+                'summary' => 'What the callers subscription is doing',
+                'description' => 'renews is reported separately from cancelled, because they '
+                    .'are not opposites: a legacy plan type, and a row the old Yii cron does '
+                    .'not select, both simply run out without anyone having cancelled. The app '
+                    .'needs that to choose between "renews on" and "access ends on".',
+                'responses' => self::ok('The current subscription, or nulls.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'subscription_id' => ['type' => 'integer', 'nullable' => true],
+                        'expiration_date' => ['type' => 'string', 'nullable' => true],
+                        'cancelled' => ['type' => 'boolean'],
+                        'renews' => ['type' => 'boolean'],
+                    ],
+                ]) + self::failures([401 => 'Missing, unknown or mismatched token.']),
+            ]],
+
+            '/v1/user/cancel-subscription' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Stop a subscription renewing',
+                'description' => 'The first time either application has offered this: there '
+                    .'was no endpoint, no screen and no setting, so a subscribers only way to '
+                    .'stop renewing was to let their card fail. '
+                    .'Access is not revoked — the subscription runs to the date already paid '
+                    .'for — so this is not a refund. '
+                    .'What it writes depends on the gateway: a Moneris row also gets '
+                    .'auto_renew = 0, because that is the only signal the old cron reads, '
+                    .'while a Stripe row carries that already and this APIs scheduler reads '
+                    .'the cancellation instead.',
+                'requestBody' => self::formBody([
+                    'reason' => 'Optional. Free text, kept for reporting.',
+                ], []),
+                'responses' => self::ok('The subscription, now cancelled.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'subscription_id' => ['type' => 'integer', 'nullable' => true],
+                        'cancelled' => ['type' => 'boolean'],
+                        'renews' => ['type' => 'boolean'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'No active subscription, or it is already cancelled.',
+                    422 => 'Validation failed; see errors.',
+                ]),
+            ]],
+
+            '/v1/user/resume-subscription' => ['post' => [
+                'tags' => ['Security'],
+                'summary' => 'Put a cancelled subscription back on renewal',
+                'description' => 'Only while it is still running; once it has expired, buying '
+                    .'again is a purchase rather than a change of mind. '
+                    .'Not the mirror image of cancelling: auto_renew is restored only for a '
+                    .'Moneris row. Restoring it on a Stripe row would hand that row to the old '
+                    .'cron, which still has the customers Moneris card on file, and they would '
+                    .'be charged by both processors.',
+                'responses' => self::ok('The subscription, renewing again.', [
+                    'type' => 'object',
+                    'properties' => [
+                        'subscription_id' => ['type' => 'integer', 'nullable' => true],
+                        'cancelled' => ['type' => 'boolean'],
+                        'renews' => ['type' => 'boolean'],
+                    ],
+                ]) + self::failures([
+                    401 => 'Missing, unknown or mismatched token.',
+                    409 => 'No active subscription, or it is not cancelled.',
                 ]),
             ]],
 

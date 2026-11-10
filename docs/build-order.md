@@ -432,11 +432,55 @@ carried over:
 - **Attempts are counted from the transaction rows**, not the calendar, so
   running the command twice in a day cannot produce a third attempt.
 
+**Renewal reminders — DONE, 2026-11-10.** `clas:send-renewal-reminders`,
+daily at 08:15, seven days ahead. Added after customers wrote in saying no
+email warns them a renewal is coming: the Yii application has that reminder,
+in `sendExpiryReminder()`, and it has been commented out since **14 May 2024**
+(commit `7370d58e`, "remove sending expiry reminder emails"). For two years
+the first a subscriber heard of a renewal was the receipt for a charge
+already taken.
+
+**This one covers the whole book, not only this API's rows** — the single
+place that deliberately crosses the gateway line. Charging a Moneris row from
+here would double-bill somebody, which is what `auto_renew = 0` prevents;
+*reminding* one moves no money and writes nothing to the shared database, and
+nearly every live subscription is still on Moneris, so scoping it to Stripe
+would have fixed the complaint for almost nobody. **It is safe only while the
+Yii reminder stays switched off** — turning that back on would have both
+applications mailing the same people. `clas.subscriptions.reminder.gateways`
+carries the note, and dropping `moneris` from it is the switch if that ever
+changes.
+
+Only subscriptions that really will be charged are reminded: a Stripe row
+with no payment method, a Moneris row with `auto_renew = 0`, and a type 1 or
+2 row the old cron does not select are all going to expire rather than renew,
+and "renews on the 17th" would be false for every one of them. Nothing warns
+those subscribers that access is about to lapse — that is a different email
+saying the opposite thing, and it is not built.
+
+Both of the old implementation's failure modes are avoided, and each is
+covered by a test that fails without the guard:
+
+- **A missed run lost the reminder.** It matched `expiration_date` against a
+  single date, so a day the cron did not run was a cohort that heard nothing.
+  The window here is a range, and a missed run costs a day.
+- **Running twice mailed twice.** Nothing recorded what had been sent. A row
+  in `clas_api.subscription_reminders` is now claimed before the mail goes
+  out, under a unique key on the subscription *and* the renewal date — per
+  renewal, not per subscriber, or the second year's reminder would never
+  arrive. A failed send releases its claim so the next day retries.
+
 Also worth recording: **there is no way to cancel a subscription or turn off
 auto-renewal in either application.** `auto_renew = 0` is only ever set on
 the free-promocode path. So a subscriber's only way to stop renewing is to
 let the card fail. If a cancel path is ever built it needs its own column,
 because `auto_renew` now means "not renewed by the old cron" for Stripe rows.
+
+That gap is now visible to customers rather than merely true: the reminder
+tells people a charge is coming and has to tell them what to do if they don't
+want it, and the only honest answer is to email support. A self-serve cancel
+is worth its own task — it needs a column of its own, an endpoint, and a line
+in the app.
 
 One bug the renewal tests caught before it could ship: the payment intent had
 `automatic_payment_methods` with redirects disabled, which Stripe refuses to
@@ -535,9 +579,76 @@ a migrated charge is recognisable on a bank statement. That was the one thing
 that could have made silence a bad idea, since an unrecognised charge is how
 a migration turns into chargebacks.
 
-```
-Port the signage payment endpoints in ManageListings — 8h
-```
+**The signage payment endpoints — DONE, 2026-11-10.** add-signages,
+promocode, update-shipping-cost and update-payment, on Stripe. The
+arithmetic the four of them share is in `App\Services\SignageOrder` rather
+than repeated in each, because four endpoints disagreeing about the order
+total is how a listing gets charged for something it did not buy.
+
+Five defects, all of them exercised by the live app:
+
+- **The caller set part of the amount they were charged.**
+  `update-shipping-cost` took a string of the form
+  `Fedex@@@Fedex Ground@@@24.50`, split it on `@@@` and used the third part
+  as the shipping charge. That figure went into `land.total_amount`, which is
+  exactly what `update-payment` passed to Moneris. Posting `@@@0.00` shipped
+  for nothing; a negative third part reduced the whole order. It also read
+  index `[2]` without checking the string had three parts, so anything
+  without separators was a PHP notice and a silent zero. The caller now names
+  a *method* and `App\Services\SignageShipping` prices it.
+- **Quantities were truthy, not validated.** `if ($option && $qty && ...)`
+  passes a negative quantity, which was then added to the stored one —
+  reducing the order and taking `signage_amount` with it.
+- **An order could be paid twice.** Nothing looked at `payment_status`;
+  calling `update-payment` again charged the card a second time and
+  overwrote the first receipt, so there was not even a record of it.
+- **Promo codes ignored their own type**, the same defect as the
+  subscription path: any `onetime` row gave 100% off whatever the column
+  said.
+- **And were never marked used.** The signage path stored the code against
+  the listing and never incremented `used`, so a single-use code worked on
+  every listing for ever. `FREELISTING` is kept as a signage-only code,
+  because that is what it was — it never applied to subscriptions.
+
+Two things this port does **not** carry over, both flagged rather than
+quietly dropped:
+
+- **Live FedEx rates.** The old application quoted them through FedEx's Rate
+  Service v28 SOAP API — their retired Web Services interface, with
+  credentials among the secrets waiting to be rotated.
+  `clas.signage.shipping.rates` is empty by default and **nothing invents a
+  price**: a deployment with no rate card offers collection only. Supply the
+  real card, or put a live quote behind the same service, before signs can
+  be posted. **1h** to enter a rate card; more to reinstate a live quote.
+- **The order PDF.** `_NotifyAdmin` rendered the listing to a PDF with a
+  Code 39 barcode and mailed it to the admin address. The admin notice is
+  ported and carries the listing, the lines, the address and what was paid —
+  what fulfilment reads off it — but not the attachment. Worth checking
+  whether anyone downstream depends on it. **2h** if it has to come back.
+
+**Cancelling a subscription — DONE, 2026-11-10.** `user/cancel-subscription`,
+`user/resume-subscription` and `user/subscription`. Neither application had
+this: no endpoint, no screen, no setting, so a subscriber's only way to stop
+renewing was to let their card fail. The renewal reminder forced it — a mail
+saying "we will charge your card on the 17th" has to be able to answer "then
+don't".
+
+Cancelling does not revoke access. The subscription runs to the date already
+paid for and the ordinary expiry sweep ends it, so this is a change to what
+happens next, not a refund.
+
+It needed a column of its own: `auto_renew` already means "not renewed by the
+old cron" for a Stripe row, so a cancelled Stripe subscription would be
+indistinguishable from an ordinary one. `cancelled_at` is the intent for both
+gateways, and what actually stops the money differs — a Moneris row also gets
+`auto_renew = 0`, because that is the only signal the Yii cron reads.
+
+**Resuming is deliberately not the mirror image**, and this is the sharp
+edge: `auto_renew` is restored only for a Moneris row. Restoring it on a
+Stripe row would hand that row to an application that still holds the
+customer's Moneris card, and a year later they would be charged twice, once
+by each processor, with nothing in either application connecting the two. A
+test fails if that guard is removed.
 
 Deferred, not cancelled:
 
@@ -580,12 +691,25 @@ see docs/payments-decision.md — 2h
 Produce the field-by-field change report for the app developer — 2h
 Set up the staging subdomain, TLS and DNS for the new API — 4h
 Deploy pipeline from the repository to the staging server — 4h
+Make sure the deployment host's timezone database is current — the live Yii
+app runs PHP 5.6 with tzdata 2016.10 and reports sunrise an hour early across
+five Canadian provinces — 1h
 Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
 Supply an FCM service account so push can be delivered at all — 3h
 Decide which Stripe account CLAS subscriptions go live on — undecided as of
 2026-11-06 — 1h
 Decide what to do about profile positions — see docs/profile-positions.md — 4h
+Confirm the signage shipping rate card against one real FedEx quote. A
+four-zone card is now in config/clas.php, derived from the four 2023
+shipments in the database and uplifted for three years of rate increases —
+derived, not quoted. It over-charges cities and under-charges rural
+addresses, by design. It also assumes every sign is a small sign — the old
+quote sent 2 lb / 10x10x3 for every line including the $399.99 Large Sign,
+so both the historical figures and these rates understate that one, which
+was accepted on 2026-11-10 because large signs are rare — 1h
+Decide whether the signage order PDF has to come back; the admin notice is
+ported, the barcode attachment is not — 2h
 Decide where listing photos live once the API moves to its own subdomain — 4h
 Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 ```
@@ -600,29 +724,31 @@ Add a manager-acceptance endpoint so invitations to new accounts work — 4h
 | 4. Notifications | 0 |
 | 5. Self-contained features | 0 |
 | 6. ManageListings | 0 |
-| 7. Payments | 8 |
-| Cross-cutting | 44 |
-| **Total** | **52** |
+| 7. Payments | 0 |
+| Cross-cutting | 48 |
+| **Total** | **48** |
 
-Payments is 8 of that now: phase 1 is built and phase 2 is deferred. The
-deferred migration work is 30 hours and is listed in group 7 so it is not
-lost — it is excluded from the total because it is not on the plan.
+**Every endpoint is built.** Payments is 0: phase 1 is complete, the signage
+endpoints are ported and phase 2 is deferred. The deferred migration work is
+30 hours and stays listed in group 7 so it is not lost — it is excluded from
+the total because it is not on the plan.
 
-Excluding payments and cross-cutting: **0 hours** — every endpoint the new
-app needs apart from paying for things is built. What is left is the
-payment group and the cross-cutting work.
+What remains is entirely cross-cutting, and most of it is not code: secrets
+to rotate, a staging host to stand up, a deploy pipeline, and several
+decisions nobody has made yet.
 
 ## What is already done
 
-**95 endpoints.** Token middleware, all thirteen Listings endpoints, all
+**102 endpoints.** Token middleware, all thirteen Listings endpoints, all
 sixteen Requests endpoints, all ten Notifications endpoints, the fourteen in
 the user, settings and security group, the fifteen in hunters tags, chat and
-reference data, the eighteen non-payment ManageListings endpoints, and the
-eight that make up phase 1 of the payment work: subscribe, apply-promocode,
-the three product subscriptions, the Stripe webhook, and the card-on-file pair
-that migrates a subscriber off Moneris when they change their card.
+reference data, all twenty-two ManageListings endpoints including the four
+that take payment, and the payment group: subscribe, apply-promocode, the
+three product subscriptions, the Stripe webhook, the card-on-file pair that
+migrates a subscriber off Moneris when they change their card, and the three
+that cancel, resume and report a subscription.
 
-Interactive documentation at `/docs` covers every one of them, with 228 tests
+Interactive documentation at `/docs` covers every one of them, with 291 tests
 and seven enforced rules that hold for endpoints nobody has written yet (see
 `CLAUDE.md`):
 
