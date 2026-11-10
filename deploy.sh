@@ -56,7 +56,18 @@ php artisan optimize:clear --quiet
 echo "    caches cleared"
 
 say "Running migrations"
-php artisan migrate --force --no-interaction
+# --database=clas_api is not optional.
+#
+# The default connection is the *shared* CLAS schema, which the Yii
+# application also uses. A bare `php artisan migrate` would put the
+# migration history table there, along with Laravel's default
+# users/sessions/cache/jobs tables — eight tables added to a production
+# schema another application depends on.
+#
+# This flag puts the history in our own schema. The migrations that have to
+# alter the shared one declare `protected $connection = 'mysql'` and still
+# do, so nothing is lost by it.
+php artisan migrate --force --no-interaction --database=clas_api
 
 say "Fixing writable paths"
 # Laravel writes logs and compiled views as the web user, not as the deployer.
