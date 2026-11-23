@@ -65,11 +65,24 @@ SELECT CONCAT('keeping ', COUNT(*), ' @commerx.com accounts') AS note FROM _scru
 UPDATE user
 SET email = CONCAT('user', id, '@dev.invalid'),
     unconfirmed_email = NULL,
-    registration_ip = NULL,
-    -- A production auth_key is a working production credential. Rotating it
-    -- means a leaked dev copy cannot be used against the live API.
-    auth_key = SUBSTRING(MD5(CONCAT(id, RAND(), UUID())), 1, 32)
+    registration_ip = NULL
 WHERE id NOT IN (SELECT user_id FROM _scrub_keep);
+
+/*
+ * auth_key is rotated for EVERYONE, Commerx included.
+ *
+ * Both applications authenticate on this one column, so a production
+ * auth_key is a working production credential — not a dev artefact. Leaving
+ * the Commerx ones intact felt harmless, because staff need to recognise
+ * their own accounts; what it actually did was put 32 live production API
+ * tokens into every copy of the dev database, to be passed around in a dump.
+ *
+ * Nothing is lost by rotating them. `password_hash` is untouched throughout,
+ * so everyone still signs in with their real password and simply gets a new
+ * token — which is what signing in is for.
+ */
+UPDATE user
+SET auth_key = SUBSTRING(MD5(CONCAT(id, RAND(), UUID())), 1, 32);
 
 -- `username` is left alone. Some are real names, but they are not
 -- contactable, they are UNIQUE so rewriting them risks collisions, and

@@ -391,11 +391,35 @@ php artisan clas:send-renewal-reminders --dry-run
 php artisan clas:renew-subscriptions --dry-run
 ```
 
-Neither sends or charges anything. Only once those look right:
+Neither sends or charges anything. Only once those look right, install the
+heartbeat — **in `www-data`'s crontab, not `ubuntu`'s**:
 
 ```bash
-* * * * * cd /var/www/api && php artisan schedule:run >> /dev/null 2>&1
+sudo -u www-data crontab -e
 ```
+
+```bash
+* * * * * cd /var/www/api && php artisan schedule:run >> /var/www/api/storage/logs/scheduler.log 2>&1
+```
+
+Two details that are not stylistic.
+
+**It has to run as `www-data`.** php-fpm owns `storage/logs/laravel.log`, and
+`ubuntu` is not in the `www-data` group, so an `ubuntu` cron cannot append to
+it. That is not cosmetic while `MAIL_MAILER=log`, because that log *is* where
+the mail goes: every reminder would throw, be caught, release its claim and
+count as failed. You would read `failed: 88` and conclude the feature was
+broken. Running as `www-data` also keeps the files the scheduler creates
+consistent with what php-fpm writes.
+
+**Keep the output.** A scheduler redirected to `/dev/null` is how you find
+out a week late that it never ran. If the minute-by-minute "No scheduled
+commands are ready to run" becomes noise, filter that one line rather than
+silencing the lot.
+
+Installed on the dev server 2026-11-23 and confirmed firing unattended.
+First runs are 07:15 and 08:15 **UTC** — the server's clock is `Etc/UTC`, not
+Mountain, so they land mid-afternoon Alberta time.
 
 And only then consider switching `MAIL_MAILER` off `log`.
 
