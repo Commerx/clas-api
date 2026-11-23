@@ -101,6 +101,27 @@ class TimezoneDataTest extends TestCase
     {
         $version = timezone_version_get();
 
+        /*
+         * `0.system` is not a failure.
+         *
+         * Debian and Ubuntu build PHP with --with-system-tzdata, so it reads
+         * the operating system's database and reports this instead of a
+         * version number. The dev server does exactly that, and an earlier
+         * version of this test failed there while the data was perfectly
+         * current — Edmonton, Vancouver, Regina, Toronto and Winnipeg all
+         * carried their 2026 offsets.
+         *
+         * The offsets are what actually matter, and the test above checks
+         * them. This one only catches a *stated* version that is too old, so
+         * where there is no version to state there is nothing to assert.
+         */
+        if ($version === '0.system') {
+            $this->assertTrue(true,
+                'PHP is using the OS timezone database; the offsets test covers it.');
+
+            return;
+        }
+
         // Versions look like 2026.5. Anything before 2026.2 predates the
         // Canadian change and cannot be relied on for these zones.
         $this->assertMatchesRegularExpression('/^\d{4}\.\d+$/', $version,

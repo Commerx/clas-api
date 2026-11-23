@@ -32,3 +32,10 @@ Thumbs.db
 
 # Local assistant guidance, not part of the deliverable
 CLAUDE.md
+
+# Database dumps. Never commit one: production copies carry licence numbers,
+# phone numbers, home addresses and payment tokens.
+# Deliberately not a bare *.sql — docs/sql holds scripts that belong in the
+# repository, and a blanket rule would silently hide the next one added.
+db-dump/
+*.sql.gz

@@ -80,11 +80,32 @@ class SunTimes
             round($lat, self::COORD_PRECISION),
             round($lng, self::COORD_PRECISION));
 
-        return Cache::rememberForever($key, function () use ($lat, $lng) {
+        /*
+         * Only a real answer is cached, and `rememberForever` cannot express
+         * that — it stores whatever the closure returns, fallback included.
+         *
+         * That was a trap, and it sprang on the dev server: the host had no
+         * Google key when a coordinate was first looked up, so UTC was cached
+         * *forever* for it. Setting the key afterwards changed nothing,
+         * because the lookup never ran again. Waldron reported sunrise in UTC
+         * while Toronto and Vancouver were correct, which reads as a
+         * data problem rather than a caching one.
+         *
+         * In production the same shape is worse: one timeout at the wrong
+         * moment pins a listing to the application timezone permanently, and
+         * the only trace is a log line nobody is reading a month later.
+         */
+        $cached = Cache::get($key);
+
+        if (is_string($cached) && $cached !== '') {
+            return $cached;
+        }
+
+        $zone = (function () use ($lat, $lng): ?string {
             $apiKey = config('services.google.timezone_key');
 
             if (! $apiKey) {
-                return config('app.timezone');
+                return null;
             }
 
             try {
@@ -109,7 +130,18 @@ class SunTimes
                 ]);
             }
 
-            return config('app.timezone');
-        });
+            return null;
+        })();
+
+        if ($zone !== null) {
+            Cache::forever($key, $zone);
+
+            return $zone;
+        }
+
+        // Fall back for this request only. The next one asks again, so a
+        // missing key or a momentary outage costs one wrong answer rather
+        // than a permanent one.
+        return config('app.timezone');
     }
 }

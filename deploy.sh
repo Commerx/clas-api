@@ -80,8 +80,36 @@ say "Reloading PHP-FPM"
 sudo systemctl reload "$PHP_FPM"
 
 say "Checking the application responds"
+#
+# Checked through the application's own hostname, not 127.0.0.1.
+#
+# Two things broke the naive version on the dev box, and both are the normal
+# shape of a real server:
+#
+#   * nginx serves this app from a name-based server block. A request to
+#     127.0.0.1 carries `Host: 127.0.0.1`, matches the *default* block
+#     instead, and answers 404 — so the check failed while the application
+#     was perfectly healthy.
+#   * once certbot is installed, the HTTP block answers 301 to HTTPS, which
+#     is also not 200.
+#
+# So: take the host from APP_URL, resolve it to this machine rather than
+# going out and back through DNS, and follow the redirect. -k because a
+# staging box may be running a certificate this host does not trust.
+APP_URL_LINE=$(grep -m1 '^APP_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"'\r' || true)
+CHECK_BASE="${APP_URL_LINE:-http://127.0.0.1}"
+CHECK_HOST=$(printf '%s' "$CHECK_BASE" | sed -E 's|^https?://||; s|/.*$||; s|:.*$||')
+
 for path in up health; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 "http://127.0.0.1/$path" || true)
+    if [ -n "$CHECK_HOST" ] && [ "$CHECK_HOST" != "127.0.0.1" ]; then
+        code=$(curl -skL -o /dev/null -w '%{http_code}' -m 20 \
+            --resolve "${CHECK_HOST}:443:127.0.0.1" \
+            --resolve "${CHECK_HOST}:80:127.0.0.1" \
+            "${CHECK_BASE%/}/$path" || true)
+    else
+        code=$(curl -sL -o /dev/null -w '%{http_code}' -m 20 "http://127.0.0.1/$path" || true)
+    fi
+
     printf '    /%-8s %s\n' "$path" "$code"
     if [ "$code" != "200" ]; then
         echo
