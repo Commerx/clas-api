@@ -261,10 +261,11 @@ DB_PASSWORD=...
 
 CLAS_API_DB_DATABASE=clas_api
 
-STRIPE_KEY=pk_test_...
+STRIPE_KEY=pk_test_...             # marketplace test keys, see below
 STRIPE_SECRET=sk_test_...
 STRIPE_WEBHOOK_SECRET=            # filled in at step 13
 STRIPE_ALLOWED_KEY_PREFIXES=sk_test_
+STRIPE_CURRENCY=cad
 
 # Leave on `log` until the scrub is verified and you have seen a dry run.
 MAIL_MAILER=log
@@ -283,6 +284,17 @@ Three of these are easy to get wrong:
   server in `openapi.json`. It is currently the bare IP.
 - **`STRIPE_ALLOWED_KEY_PREFIXES=sk_test_`** is what stops a live key being
   used here by accident. Do not widen it on this host.
+
+The Stripe keys are the **marketplace** test pair, taken once from the Yii
+application's `config/environments/dev/params.php`
+(`mktplace_stripe_payments_*`) — the same account the marketplace has charged
+through since 2021, so test payments land somewhere the team already watches.
+Copied, not read: nothing in this application reads the Yii config at runtime.
+The account settles in CAD, which is why `STRIPE_CURRENCY=cad`.
+
+The live pair sits in that application's `production/params.php`. It stays
+there. A live key is inert on this host regardless, because the prefix list
+above refuses it.
 
 ## 9. Deploy
 
