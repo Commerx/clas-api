@@ -696,7 +696,14 @@ app runs PHP 5.6 with tzdata 2016.10 and reports sunrise an hour early across
 five Canadian provinces — 1h
 Load-check the geofence query and add the bounding-box prefilter — 6h
 Decide and document the old API sunset date and the forced-update trigger — 2h
-Supply an FCM service account so push can be delivered at all — 3h
+Supply an FCM service account so push can be delivered at all. Bigger than
+it reads: push has delivered nothing to anyone since July 2024, because the
+Yii application posts to FCM's retired legacy endpoint, which now answers
+404, and nothing reads the response. 5,288 users have a device registered
+and have been receiving silence. v1 needs credentials only — PushSender
+already speaks the modern API — but whether the old application is migrated
+too is an open decision. See docs/push-notifications.md — 3h for v1, 8h if
+v7 is migrated as well
 Decide which Stripe account CLAS subscriptions go live on — undecided as of
 2026-11-06 — 1h
 Decide what to do about profile positions — see docs/profile-positions.md — 4h
