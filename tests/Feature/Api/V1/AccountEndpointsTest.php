@@ -434,4 +434,62 @@ class AccountEndpointsTest extends TestCase
 
         Mail::assertNothingSent();
     }
+
+    // ---- blocked accounts ----------------------------------------------
+
+    /*
+     * `blocked_at = 0` is not a block.
+     *
+     * The old application compares loosely, so 0 reads as not blocked there;
+     * only block()'s `time()` means anything. Production has rows at 0, and
+     * those accounts work on the old app — so this API refusing them is a
+     * difference nobody asked for and nothing in the data explains. Both
+     * directions are asserted, because the cheap way to "fix" this is to
+     * stop checking, and that would let genuinely blocked accounts in: the
+     * dev database alone has 162 of them.
+     *
+     * The fixture row is restored wholesale by tearDown.
+     */
+
+    public function test_a_zero_blocked_at_still_authenticates(): void
+    {
+        DB::table('user')->where('id', $this->user->id)->update(['blocked_at' => 0]);
+
+        $this->getJson('/v1/user/get?token='.$this->token())
+            ->assertOk()
+            ->assertJsonPath('data.id', (int) $this->user->id);
+    }
+
+    public function test_a_blocked_account_is_refused_by_the_middleware(): void
+    {
+        DB::table('user')->where('id', $this->user->id)
+            ->update(['blocked_at' => now()->timestamp]);
+
+        $this->getJson('/v1/user/get?token='.$this->token())
+            ->assertStatus(401)
+            ->assertJsonPath('error', 'This account has been deactivated.');
+    }
+
+    public function test_a_zero_blocked_at_can_still_log_in(): void
+    {
+        DB::table('user')->where('id', $this->user->id)->update(['blocked_at' => 0]);
+
+        $this->postJson('/v1/security/login', [
+            'login' => 'contract_fixture',
+            'password' => 'ContractTest123!',
+            'os' => 'android',
+        ])->assertOk();
+    }
+
+    public function test_a_blocked_account_cannot_log_in(): void
+    {
+        DB::table('user')->where('id', $this->user->id)
+            ->update(['blocked_at' => now()->timestamp]);
+
+        $this->postJson('/v1/security/login', [
+            'login' => 'contract_fixture',
+            'password' => 'ContractTest123!',
+            'os' => 'android',
+        ])->assertStatus(403);
+    }
 }

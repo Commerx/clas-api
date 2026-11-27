@@ -73,9 +73,21 @@ class User extends Model
         return $this->confirmed_at !== null;
     }
 
+    /**
+     * Only a positive timestamp means blocked.
+     *
+     * Deliberately not a null check. The old application compares loosely
+     * (`$this->blocked_at != null` in dektrium's User model), so a stored 0
+     * reads as *not* blocked there, and its block()/unblock() only ever write
+     * `time()` or null. Production carries rows sitting at 0 — ordinary
+     * working accounts — and a null check here would refuse them with a 403
+     * for no reason a caller could see, on accounts that sign in fine on the
+     * old app. Matching the loose comparison is what keeps the two
+     * applications agreeing while they run side by side.
+     */
     public function isBlocked(): bool
     {
-        return $this->blocked_at !== null;
+        return (int) $this->blocked_at > 0;
     }
 
     public function allowsGuest(): bool

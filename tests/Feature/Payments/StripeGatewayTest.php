@@ -227,11 +227,7 @@ class StripeGatewayTest extends TestCase
 
     private function liveTestModeGateway(): PaymentGateway
     {
-        $secret = (string) config('services.stripe.secret');
-
-        if (! str_starts_with($secret, 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured; see .env.example.');
-        }
+        $this->requireStripeSandbox();
 
         return app(PaymentGateway::class);
     }

@@ -102,6 +102,20 @@ port:
   Now an allowlist of 50 fields.
 - **save-notification-settings defaulted every absent switch to Yes**, so
   changing one turned the other three back on. Each is independent now.
+- **`blocked_at = 0` now reads as *not* blocked**, matching the old
+  application rather than the column's type. Dektrium's User model asks
+  `$this->blocked_at != null` — a loose comparison, so 0 means nothing there,
+  and its block()/unblock() only ever write `time()` or null. This API had a
+  strict null check, which refused those accounts: a 401 from the token
+  middleware and a 403 from login, on accounts that sign in fine on the old
+  app, with nothing in the data to explain it. Production carries such rows,
+  so clearing them is not a fix — the next import brings them back. The same
+  reading was wrong in two queries that excluded those users by
+  `whereNull`: they would have lost their renewal reminder, and, worse, never
+  been auto-renewed, so an active subscriber would have lapsed in silence.
+  `User::isBlocked()` and both queries now treat only a positive timestamp as
+  a block, and tests pin it from both sides — a zero authenticates, a
+  timestamp still does not.
 
 ### 4. Notifications — DONE
 

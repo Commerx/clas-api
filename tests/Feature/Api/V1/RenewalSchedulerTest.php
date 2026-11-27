@@ -89,9 +89,7 @@ class RenewalSchedulerTest extends TestCase
     /** A card Stripe is holding, attached once per test that needs one. */
     private function card(): StoredCard
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         return $this->card ??= app(PaymentGateway::class)
             ->rememberCard(User::find($this->user->id), 'pm_card_visa');
@@ -354,9 +352,7 @@ class RenewalSchedulerTest extends TestCase
     /** A declined renewal is recorded and the customer told. */
     public function test_a_declined_renewal_is_recorded_and_notified(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         // An attached card that cannot be charged unattended: it wants 3-D
         // Secure, and there is nobody there to provide it.
@@ -407,5 +403,69 @@ class RenewalSchedulerTest extends TestCase
             ->where('user_id', $this->user->id)->count());
 
         Mail::assertNothingSent();
+    }
+
+    // ---- blocked accounts ----------------------------------------------
+
+    /*
+     * Which accounts are due, asserted against due() rather than run().
+     *
+     * run() would charge a real test card, and the question here is only
+     * which rows the query admits — so these assert the selection directly
+     * and move no money. The rows carry fake Stripe ids for the same reason:
+     * due() only checks that a payment method is present.
+     */
+
+    /**
+     * A `blocked_at` of 0 is not a blocked account, and this is the costly
+     * place to get it wrong: excluded here, a paying subscriber is never
+     * charged and simply lapses, having done nothing and been told nothing.
+     */
+    public function test_a_zero_blocked_at_is_still_due(): void
+    {
+        $id = $this->subscription([
+            'stripe_customer_id' => 'cus_fixture',
+            'stripe_payment_method_id' => 'pm_fixture',
+        ]);
+
+        DB::table('user')->where('id', $this->user->id)->update(['blocked_at' => 0]);
+
+        try {
+            $due = array_map(
+                static fn (object $row): int => (int) $row->subscription_id,
+                $this->renewals()->due(),
+            );
+
+            $this->assertContains($id, $due,
+                'The old application reads 0 as not blocked, so this subscriber is live.');
+        } finally {
+            DB::table('user')->where('id', $this->user->id)
+                ->update(['blocked_at' => null]);
+        }
+    }
+
+    /** And a real block still keeps the card untouched. */
+    public function test_a_blocked_account_is_not_due(): void
+    {
+        $id = $this->subscription([
+            'stripe_customer_id' => 'cus_fixture',
+            'stripe_payment_method_id' => 'pm_fixture',
+        ]);
+
+        DB::table('user')->where('id', $this->user->id)
+            ->update(['blocked_at' => now()->timestamp]);
+
+        try {
+            $due = array_map(
+                static fn (object $row): int => (int) $row->subscription_id,
+                $this->renewals()->due(),
+            );
+
+            $this->assertNotContains($id, $due,
+                'A blocked account must never be charged.');
+        } finally {
+            DB::table('user')->where('id', $this->user->id)
+                ->update(['blocked_at' => null]);
+        }
     }
 }

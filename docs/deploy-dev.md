@@ -261,10 +261,10 @@ DB_PASSWORD=...
 
 CLAS_API_DB_DATABASE=clas_api
 
-STRIPE_KEY=pk_test_...             # marketplace test keys, see below
-STRIPE_SECRET=sk_test_...
+STRIPE_KEY=pk_test_...             # CLAS sandbox, see below
+STRIPE_SECRET=rk_test_...          # yes, rk_ — see below
 STRIPE_WEBHOOK_SECRET=            # filled in at step 13
-STRIPE_ALLOWED_KEY_PREFIXES=sk_test_
+STRIPE_ALLOWED_KEY_PREFIXES=sk_test_,rk_test_
 STRIPE_CURRENCY=cad
 
 # Leave on `log` until the scrub is verified and you have seen a dry run.
@@ -282,19 +282,34 @@ Three of these are easy to get wrong:
   configuration, including the Stripe secret.
 - **`APP_URL`** is what the `/docs` console calls and what appears as the
   server in `openapi.json`. It is currently the bare IP.
-- **`STRIPE_ALLOWED_KEY_PREFIXES=sk_test_`** is what stops a live key being
-  used here by accident. Do not widen it on this host.
+- **`STRIPE_ALLOWED_KEY_PREFIXES=sk_test_,rk_test_`** is what stops a live key
+  being used here by accident. Both entries are test prefixes; adding a
+  `_live_` one is the single switch that makes charges real. Do not widen it
+  on this host.
 
-The Stripe keys are the **marketplace** test pair, taken once from the Yii
-application's `config/environments/dev/params.php`
-(`mktplace_stripe_payments_*`) — the same account the marketplace has charged
-through since 2021, so test payments land somewhere the team already watches.
-Copied, not read: nothing in this application reads the Yii config at runtime.
-The account settles in CAD, which is why `STRIPE_CURRENCY=cad`.
+The Stripe keys are a **sandbox of CLAS's own Stripe account**, created
+2026-11-27. Verified against the live API rather than assumed: the account
+reports `livemode: false` and settles in **CAD**, which is why
+`STRIPE_CURRENCY=cad`. A new account inherits the currency of the country it
+was registered in, so this is worth re-checking rather than copying forward if
+the account is ever replaced — a mismatch here surfaces as a currency error
+from Stripe that reads like an application bug.
 
-The live pair sits in that application's `production/params.php`. It stays
-there. A live key is inert on this host regardless, because the prefix list
-above refuses it.
+**`STRIPE_SECRET` holds an `rk_test_` key, and that is correct.** Stripe has
+merged standard and restricted keys into a single kind it calls a secret key,
+so a newly created sandbox key carries the restricted prefix; there is no
+`sk_test_` to find on a new account, and Stripe now advises against plain
+secret keys for new integrations. Both prefixes are admitted — see the comment
+in `config/services.php` — and neither can touch real money.
+
+Earlier deployments used the marketplace test pair from the Yii application's
+`config/environments/dev/params.php` (`mktplace_stripe_payments_*`). That is
+history now, but the reason it was replaced is worth keeping: CLAS
+subscriptions and marketplace orders settling into one Stripe account would
+have had to be told apart afterwards, in the books, forever.
+
+Whichever account is in use, nothing in this application reads the Yii config
+at runtime — keys are copied in deliberately, never looked up.
 
 ## 9. Deploy
 

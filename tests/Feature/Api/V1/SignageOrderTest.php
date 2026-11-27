@@ -636,9 +636,7 @@ class SignageOrderTest extends TestCase
     /** A real charge, against Stripe test mode. */
     public function test_a_paid_order_is_charged_and_recorded(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         $this->orderTwoSigns();
 

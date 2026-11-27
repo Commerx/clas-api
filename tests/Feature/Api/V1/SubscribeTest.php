@@ -309,9 +309,7 @@ class SubscribeTest extends TestCase
     /** The paid path, end to end, against Stripe test mode. */
     public function test_a_card_is_charged_and_the_subscription_recorded(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         $data = $this->postJson('/v1/user/subscribe', [
             'token' => $this->token(),
@@ -350,9 +348,7 @@ class SubscribeTest extends TestCase
      */
     public function test_a_charge_that_does_not_succeed_leaves_nothing_behind(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         $this->postJson('/v1/user/subscribe', [
             'token' => $this->token(),
@@ -372,9 +368,7 @@ class SubscribeTest extends TestCase
     /** A card the gateway will not even hold does not create a subscription. */
     public function test_a_card_that_cannot_be_saved_leaves_nothing_behind(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
 
         $this->postJson('/v1/user/subscribe', [
             'token' => $this->token(),

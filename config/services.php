@@ -26,15 +26,18 @@ return [
      * here while the Yii application keeps charging the existing book
      * through Moneris; docs/moneris-to-stripe-migration.md has the plan.
      *
-     * The keys currently in .env are the marketplace *test* keys, copied
-     * once. Nothing in this application reads them from the Yii config at
-     * runtime.
-     *
      * A secret key alone does not enable payments: it must also be a key
-     * this deployment is willing to use, which in test mode means
-     * `sk_test_`. `StripeGateway::isConfigured()` is what the endpoints
-     * check, and it returns false for a live key unless the prefix below
-     * says otherwise.
+     * this deployment is willing to use. `StripeGateway::isConfigured()` is
+     * what the endpoints check, and it returns false for a live key unless
+     * the prefix list below says otherwise.
+     *
+     * Two prefixes mean "a test key", not one. Stripe has folded standard
+     * and restricted keys into a single kind it calls a secret key, and a
+     * key created under that scheme carries the restricted prefix — so a
+     * sandbox key is `sk_test_` on older accounts and `rk_test_` on newer
+     * ones, for the same thing. Both are admitted; neither can touch real
+     * money. Stripe also now advises against plain secret keys for new
+     * integrations, so `rk_test_` is what a new account will hand you.
      */
     'stripe' => [
         'key' => env('STRIPE_KEY'),
@@ -45,12 +48,14 @@ return [
          * Which key prefixes this deployment accepts. Test mode is the
          * default everywhere, so a live key has to be opted into by naming
          * it here — a deployment cannot start charging real cards because
-         * somebody pasted the wrong key into .env.
+         * somebody pasted the wrong key into .env. Widening this to a
+         * `_live_` prefix is the single switch that makes charges real, so
+         * it belongs in a deliberate deployment step and nowhere else.
          */
-        'allowed_key_prefixes' => array_filter(explode(',', (string) env(
+        'allowed_key_prefixes' => array_filter(array_map('trim', explode(',', (string) env(
             'STRIPE_ALLOWED_KEY_PREFIXES',
-            'sk_test_',
-        ))),
+            'sk_test_,rk_test_',
+        )))),
 
         /* The currency every amount is charged in. */
         'currency' => env('STRIPE_CURRENCY', 'cad'),

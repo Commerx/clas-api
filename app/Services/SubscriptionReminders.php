@@ -112,7 +112,13 @@ class SubscriptionReminders
             ->join('user as u', 'u.id', '=', 'us.user_id')
             ->leftJoin('profile as p', 'p.user_id', '=', 'u.id')
             ->where('us.status', 'Active')
-            ->whereNull('u.blocked_at')
+            // Not blocked. 0 counts as not blocked, because that is how the
+            // old application reads it — see User::isBlocked(). Grouped so it
+            // cannot leak into the surrounding OR logic.
+            ->where(function ($active) {
+                $active->whereNull('u.blocked_at')
+                    ->orWhere('u.blocked_at', '<=', 0);
+            })
             // Nothing is coming, so there is nothing to warn about. Sending
             // "we will charge your card" to somebody who has just cancelled
             // is the one way this feature could make things worse.

@@ -272,6 +272,29 @@ class RenewalReminderTest extends TestCase
         }
     }
 
+    /**
+     * But a `blocked_at` of 0 is not a blocked account.
+     *
+     * The old application compares the column loosely, so 0 means nothing
+     * there, and production carries rows sitting at it. Excluding them here
+     * loses the reminder for a paying subscriber who is about to be charged
+     * — silently, which is the failure this whole feature exists to end.
+     */
+    public function test_a_zero_blocked_at_is_still_reminded(): void
+    {
+        $this->subscription();
+
+        DB::table('user')->where('id', $this->user->id)->update(['blocked_at' => 0]);
+
+        try {
+            $this->assertSame(1, $this->reminders()->run()['sent']);
+            Mail::assertSent(RenewalReminder::class);
+        } finally {
+            DB::table('user')->where('id', $this->user->id)
+                ->update(['blocked_at' => null]);
+        }
+    }
+
     // ---- once, and only once -------------------------------------------
 
     /**

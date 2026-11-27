@@ -117,7 +117,13 @@ class SubscriptionRenewals
             ->whereNull('us.cancelled_at')
             ->whereRaw('us.expiration_date <= CURDATE()')
             ->whereRaw('us.expiration_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)', [$grace])
-            ->whereNull('u.blocked_at')
+            // Not blocked. 0 counts as not blocked, because that is how the
+            // old application reads it — see User::isBlocked(). Grouped so it
+            // cannot leak into the surrounding OR logic.
+            ->where(function ($active) {
+                $active->whereNull('u.blocked_at')
+                    ->orWhere('u.blocked_at', '<=', 0);
+            })
             ->whereNotNull('us.stripe_payment_method_id')
             ->get([
                 'us.subscription_id', 'us.user_id', 'us.subscription_type',

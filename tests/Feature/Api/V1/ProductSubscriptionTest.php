@@ -83,9 +83,7 @@ class ProductSubscriptionTest extends TestCase
 
     private function requireStripe(): void
     {
-        if (! str_starts_with((string) config('services.stripe.secret'), 'sk_test_')) {
-            $this->markTestSkipped('No Stripe test key configured.');
-        }
+        $this->requireStripeSandbox();
     }
 
     /** Each product charges its own price and writes its own table. */
